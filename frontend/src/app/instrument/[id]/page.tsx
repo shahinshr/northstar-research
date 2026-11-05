@@ -10,19 +10,21 @@ import Dcf from "@/components/Dcf";
 import { JobPill, useJobTracker } from "@/components/jobs";
 import { MetricGrid, Notes, PriceRisk, ScoreCard, Sources } from "@/components/InstrumentParts";
 import FundDetail from "@/components/FundDetail";
-import { Confidence, Empty, Flags, MetricValue, Note, Skeleton } from "@/components/ui";
+import NewsStream from "@/components/NewsStream";
+import { Confidence, Empty, Flags, LivePrice, MetricValue, Note, Skeleton } from "@/components/ui";
 import { api, type Analysis, type Period } from "@/lib/api";
 import { ago, compact, dateFmt, isNum, num, pct } from "@/lib/format";
 import { METRICS } from "@/lib/metrics";
 
-const TABS = ["Overview", "Fundamentals", "Valuation", "Analysts", "Price & risk", "News", "Sources", "Notes"] as const;
+const TABS = ["Overview", "Fundamentals", "Valuation", "Analysts", "Price & risk", "Sources", "Notes"] as const;
 type Tab = (typeof TABS)[number];
 
 export default function InstrumentPage() {
   const { id } = useParams<{ id: string }>();
   const qc = useQueryClient();
   const { job, track, busy } = useJobTracker();
-  const q = useQuery({ queryKey: ["analysis", id], queryFn: () => api.analysis(id) });
+  const q = useQuery({ queryKey: ["analysis", id], queryFn: () => api.analysis(id), refetchInterval: 60_000, refetchOnWindowFocus: true });
+  const live = useQuery({ queryKey: ["live", id], queryFn: () => api.live(id), refetchInterval: (x) => (x.state.data?.refreshing ? 10_000 : 30_000) });
   const sp = useSearchParams();
   const slug = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, "-");
   const [tab, setTab] = useState<Tab>(() => TABS.find((t) => slug(t) === sp.get("tab")) ?? "Overview");
@@ -34,9 +36,11 @@ export default function InstrumentPage() {
   const refresh = (kind: "refresh_prices" | "refresh_analysis") =>
     api.refresh({ scope: "selection", instrument_ids: [id], kind, mode: "force" }).then(track).catch((e: Error) => alert(e.message));
 
-  if (a.asset_class === "fund") return <FundDetail a={a} job={job} track={track} busy={busy} />;
+  if (a.asset_class === "fund") return <FundDetail a={a} job={job} track={track} busy={busy} live={live.data ?? null} />;
+  const lq = live.data?.quote;
   return (
-    <div className="space-y-5">
+    <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
+    <div className="min-w-0 space-y-5">
       <Link href="/" className="inline-flex items-center gap-1 text-sm text-ink2 hover:text-ink"><ArrowLeft size={14} /> Dashboard</Link>
 
       {/* ------------------------------------------------ header */}
@@ -54,12 +58,13 @@ export default function InstrumentPage() {
           </p>
         </div>
         <div className="text-right">
-          <div className="text-3xl font-semibold text-ink tnum">{num(a.price.value)} <span className="text-base font-normal text-muted">{a.currency}</span></div>
+          <LivePrice official={a.price.value} currency={a.currency} live={lq} size="lg" />
           <div className="text-sm">
-            {isNum(a.price.change_1d) ? <span className={a.price.change_1d >= 0 ? "text-up" : "text-down"}>{pct(a.price.change_1d, 2, true)}</span> : null}
-            <span className="text-muted"> · close {dateFmt(a.price.date)} · mkt cap {compact(a.market_cap.value, a.currency)}</span>
+            {lq?.provisional && isNum(lq.change) ? <span className={lq.change >= 0 ? "text-up" : "text-down"}>{pct(lq.change, 2, true)} today</span>
+              : isNum(a.price.change_1d) ? <span className={a.price.change_1d >= 0 ? "text-up" : "text-down"}>{pct(a.price.change_1d, 2, true)}</span> : null}
+            <span className="text-muted"> · close {dateFmt(a.price.date)} {num(a.price.value)} · mkt cap {compact(a.market_cap.value, a.currency)}</span>
           </div>
-          <div className="text-2xs text-muted">{a.price.note}</div>
+          <div className="text-2xs text-muted">{lq?.provisional ? `${lq.note}${lq.fetched_at ? ` · quote ${ago(lq.fetched_at)}` : ""}` : a.price.note}</div>
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -70,10 +75,9 @@ export default function InstrumentPage() {
       </div>
 
       {/* ------------------------------------------------ tabs */}
-      <div className="flex gap-1 overflow-x-auto border-b border-line" role="tablist">
+      <div className="seg max-w-full overflow-x-auto" role="tablist">
         {TABS.map((t) => (
-          <button key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)}
-            className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm ${tab === t ? "border-accent font-medium text-ink" : "border-transparent text-ink2 hover:text-ink"}`}>{t}</button>
+          <button key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)} className="whitespace-nowrap">{t}</button>
         ))}
       </div>
 
@@ -82,9 +86,14 @@ export default function InstrumentPage() {
       {tab === "Valuation" && <Dcf a={a} />}
       {tab === "Analysts" && <Analysts a={a} />}
       {tab === "Price & risk" && <PriceRisk id={id} a={a} />}
-      {tab === "News" && <News a={a} />}
       {tab === "Sources" && <Sources a={a} />}
       {tab === "Notes" && <Notes id={id} />}
+    </div>
+    <aside className="xl:sticky xl:top-20 xl:self-start">
+      <NewsStream title="Breaking news" items={live.data?.news ?? []} loading={live.isLoading} social={live.data?.social} maxHeight={620}
+        subtitle={live.data?.news_source ? <>Source {live.data.news_source.provider} · fetched {ago(live.data.news_source.fetched_at)}
+          {live.data.refreshing ? " · refreshing…" : ""} · severity is a keyword screen, not advice</> : "Fetching…"} />
+    </aside>
     </div>
   );
 }
@@ -240,22 +249,4 @@ function Analysts({ a }: { a: Analysis }) {
   );
 }
 
-/* ================================================================== News */
-function News({ a }: { a: Analysis }) {
-  const src = a.sources.news;
-  return (
-    <div className="card">
-      <div className="border-b border-line px-4 py-2 text-xs text-muted">
-        {src?.provider ? <>Source: {src.provider} ({src.route}) · {src.status === "partial" ? "search-matched — may include unrelated stories" : "ticker-linked"}</> : "No news provider succeeded"} ·
-        News activity {a.metrics.news_activity?.status === "valid" ? `${num(a.metrics.news_activity.value, 1)}× baseline` : "N/A"}
-      </div>
-      {a.news.length === 0 ? <p className="p-6 text-sm text-ink2">No stories. Add a Finnhub key for a ticker-linked feed (see Data health).</p> : (
-        <ul>{a.news.map((n, i) => (
-          <li key={i} className="border-b border-line px-4 py-3 last:border-0">
-            <a href={n.url} target="_blank" rel="noreferrer noopener" className="font-medium text-ink hover:underline">{n.title}</a>
-            <div className="mt-0.5 text-xs text-muted">{n.match === "mention" ? <span className="chip mr-1.5 py-0 text-2xs" title="Company appears in the story summary, not the headline">mention</span> : null}{n.source} · {typeof n.published_at === "number" ? dateFmt(new Date(n.published_at * 1000).toISOString(), true) : dateFmt(n.published_at as string, true)}</div>
-          </li>))}</ul>)}
-    </div>
-  );
-}
 

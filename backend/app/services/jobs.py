@@ -16,7 +16,7 @@ from sqlalchemy import select
 
 from ..db import Instrument, Job, SessionLocal, get_setting, utcnow
 from .analysis import compute_run
-from .ingest import prune, refresh_macro, refresh_many, sync_universe
+from .ingest import prune, prune_runs, refresh_macro, refresh_many, refresh_quotes, store, sync_universe
 
 log = logging.getLogger(__name__)
 _pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="job")  # serial: protects free-tier quotas
@@ -62,6 +62,15 @@ def _run(job_id: str, kind: str, ids: list[str] | None, datasets: list[str] | No
                 summary = run_validation(lambda msg: _update(job_id, message=msg))
                 _update(job_id, status="completed", message=summary)
                 return
+            if kind == "refresh_quotes":
+                _update(job_id, status="fetching", message="Intraday quotes for open markets")
+                stats = intraday_refresh(s, force=(mode == "force"))
+                _update(job_id, status="calculating", progress=stats,
+                        message=f"{stats['quotes']} quotes, {stats['news']} news feeds refreshed ({', '.join(stats['regions']) or 'no market open'})")
+                run = compute_run(s, kind="intraday")
+                _update(job_id, status="completed" if run.status == "completed" else "failed", run_id=run.id)
+                prune_runs(s)
+                return
             if kind in ("refresh_prices", "refresh_analysis", "discovery"):
                 prog: dict = {"requested": 0, "done": 0, "updated": 0, "unchanged": 0, "failed": 0, "skipped": 0}
                 _update(job_id, status="fetching", progress=prog, message="Syncing universe & macro series")
@@ -84,7 +93,7 @@ def _run(job_id: str, kind: str, ids: list[str] | None, datasets: list[str] | No
                 _update(job_id, status="calculating", progress=prog, message=msg)
             else:
                 _update(job_id, status="calculating", message="Recalculating from stored data (no provider traffic)")
-            run = compute_run(s)
+            run = compute_run(s, kind="daily")
             final = "completed" if run.status == "completed" else "failed"
             with SessionLocal() as s2:
                 j = s2.get(Job, job_id)
@@ -95,13 +104,43 @@ def _run(job_id: str, kind: str, ids: list[str] | None, datasets: list[str] | No
                     s2.commit()
             _update(job_id, status=final, run_id=run.id)
             try:
-                removed = prune(s)
-                log.info("pruned %s old snapshots", removed)
+                removed = prune(s) + prune_runs(s)
+                log.info("pruned %s old snapshots/runs", removed)
             except Exception:  # noqa: BLE001
                 log.exception("prune failed")
     except Exception as e:  # noqa: BLE001
         log.exception("job %s failed", job_id)
         _update(job_id, status="failed", message=f"{type(e).__name__}: {e}"[:500])
+
+
+def intraday_refresh(s, force: bool = False) -> dict:
+    """Quotes for instruments whose market is open (all if forced) + news for the watchlist and top candidates."""
+    from ..analytics.market import market_open
+    from ..db import AnalysisResult, WatchlistItem, latest_completed_run, latest_snapshot
+    from ..providers.registry import run_chain
+    insts = s.scalars(select(Instrument).where(Instrument.active.is_(True))).all()
+    regions = sorted({i.region or "US" for i in insts if force or market_open(i.region or "US")})
+    targets = [i for i in insts if (i.region or "US") in regions and i.asset_type != "mutualfund"]
+    q = refresh_quotes(s, targets) if targets else {"quotes": 0}
+    # news: watchlist + top-40 core scores, if older than 30 minutes (Finnhub free tier = 60 calls/min)
+    ids = {w.instrument_id for w in s.scalars(select(WatchlistItem))}
+    run = latest_completed_run(s)
+    if run:
+        rows = [r.row for r in s.scalars(select(AnalysisResult).where(AnalysisResult.run_id == run.id,
+                                                                    AnalysisResult.asset_class == "stock")) if r.row]
+        top = sorted([r for r in rows if (r.get("core") or {}).get("score") is not None], key=lambda r: -r["core"]["score"])[:40]
+        ids |= {r["id"] for r in top}
+    n_news = 0
+    for iid in ids:
+        inst = s.get(Instrument, iid)
+        snap = latest_snapshot(s, iid, "news")
+        fetched = snap.fetched_at if snap else None
+        if fetched is not None and fetched.tzinfo is None:
+            fetched = fetched.replace(tzinfo=utcnow().tzinfo)
+        if inst and inst.asset_type == "stock" and (fetched is None or utcnow() - fetched > timedelta(minutes=30)):
+            store(s, iid, "news", run_chain("news", inst.symbol, inst.region, name=inst.name))
+            n_news += 1
+    return {"quotes": q["quotes"], "news": n_news, "regions": regions}
 
 
 def seed_universe() -> None:
@@ -147,3 +186,27 @@ class DailyScheduler(threading.Thread):
             except Exception:  # noqa: BLE001
                 log.exception("scheduler tick failed")
             time.sleep(60)
+
+
+class IntradayScheduler(threading.Thread):
+    """Every N minutes (setting `intraday_minutes`, 0 = off) while any market is open: refresh quotes and
+    breaking news, then recalculate from the database. Daily fundamentals stay on the 04:00 discovery run."""
+
+    def __init__(self):
+        super().__init__(daemon=True, name="intraday")
+        self.last = 0.0
+
+    def run(self) -> None:
+        from ..analytics.market import market_open
+        from .universe import BENCHMARKS
+        while True:
+            try:
+                with SessionLocal() as s:
+                    minutes = int(get_setting(s, "intraday_minutes", 20) or 0)
+                if minutes > 0 and time.monotonic() - self.last >= minutes * 60:
+                    if any(market_open(r) for r in BENCHMARKS):
+                        submit("refresh_quotes")
+                        self.last = time.monotonic()
+            except Exception:  # noqa: BLE001
+                log.exception("intraday tick failed")
+            time.sleep(30)

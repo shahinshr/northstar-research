@@ -167,3 +167,15 @@ def test_watchlist_notes_scenarios_alerts():
     v2 = c.post(f"/instruments/{iid}/scenarios", json={"name": "pytest", "assumptions": {"base": {"wacc": 0.09}}}).json()
     assert v2["version"] == v1["version"] + 1  # versioned, never overwritten (spec §8)
     assert isinstance(c.get("/alerts").json(), list)
+
+
+def test_live_status_and_pulse():
+    st = c.get("/status").json()
+    assert {"run_at", "markets_open", "intraday_minutes"} <= set(st)
+    iid = next(x["id"] for x in c.get("/instruments", params={"q": "AAPL"}).json() if x["symbol"] == "AAPL")
+    lv = c.get(f"/instruments/{iid}/live").json()
+    assert lv["quote"]["price"] > 0 and "x.com" in lv["social"]["x_live"]
+    for n in lv["news"]:
+        assert n["severity"] in ("critical", "high", "normal")
+    p = c.get("/pulse").json()
+    assert all(i["severity"] in ("critical", "high") for i in p["items"])

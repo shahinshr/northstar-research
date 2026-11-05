@@ -8,9 +8,13 @@ import { useEffect, useMemo, useState } from "react";
 import { ValueQualityScatter } from "@/components/charts";
 import { ColumnPicker, DataTable, usePersisted, type Col } from "@/components/DataTable";
 import { JobPill, useJobTracker } from "@/components/jobs";
-import { Confidence, Empty, MetricValue, Note, RegionDot, ScoreBar, Skeleton, Stat } from "@/components/ui";
+import NewsStream from "@/components/NewsStream";
+import { Confidence, Empty, LivePrice, MetricValue, Note, RegionDot, ScoreBar, Skeleton, Stat, regionGroup } from "@/components/ui";
 import { api, type Dashboard, type Row } from "@/lib/api";
 import { ago, compact, dateFmt, isNum, num, pct } from "@/lib/format";
+import { REGION_LABEL } from "@/lib/metrics";
+
+const EM = new Set(["CN", "IN", "BR", "KR", "TW", "MX", "ZA"]);
 
 const v = (r: Row, k: string) => (r.metrics[k]?.status === "valid" ? r.metrics[k].value : null);
 const c = (r: Row, k: string) => r.components?.[k] ?? null;
@@ -37,7 +41,7 @@ const mcol = (id: string, label: string, def = false, title?: string): Col => ({
   id, label, def, align: "right", title, sort: (r) => v(r, id), cell: (r) => <MetricValue k={id} m={r.metrics[id]} />,
 });
 const priceCol: Col = { id: "price", label: "Price", def: true, align: "right", sort: (r) => r.price?.value ?? null,
-  cell: (r) => r.price ? (
+  cell: (r) => r.live?.provisional ? <LivePrice official={r.price?.value} currency={r.currency} live={r.live} /> : r.price ? (
     <span className="tnum" title={`${r.price.note ?? ""} · ${dateFmt(r.price.date)}`}>
       {num(r.price.value)} <span className="text-2xs text-muted">{r.currency}</span>
       {isNum(r.price.change_1d) ? <span className={`ml-1 text-2xs ${r.price.change_1d >= 0 ? "text-up" : "text-down"}`}>{pct(r.price.change_1d, 1, true)}</span> : null}
@@ -97,7 +101,8 @@ export default function DashboardPage() {
   const qc = useQueryClient();
   const { job, track, busy } = useJobTracker();
   const [asset, setAsset] = usePersisted<"stock" | "fund">("asset", "stock");
-  const q = useQuery({ queryKey: ["dashboard", asset], queryFn: () => api.dashboard(asset), refetchInterval: busy ? 8000 : false });
+  const q = useQuery({ queryKey: ["dashboard", asset], queryFn: () => api.dashboard(asset), refetchInterval: busy ? 8000 : 60_000, refetchOnWindowFocus: true });
+  const pulse = useQuery({ queryKey: ["pulse"], queryFn: api.pulse, refetchInterval: 60_000, enabled: asset === "stock" });
   const d = q.data;
   const [preset, setPreset] = usePersisted("preset", "all");
   const [stockCols, setStockCols] = usePersisted<string[]>("cols2", STOCK_COLS.filter((x) => x.def).map((x) => x.id));
@@ -128,7 +133,8 @@ export default function DashboardPage() {
   const indices = useMemo(() => [...new Set(rows.flatMap((r) => r.indices ?? []))].sort(), [rows]);
   const p = PRESETS.find((x) => x.id === preset) ?? PRESETS[0];
   const filtered = useMemo(() => rows.filter((r) =>
-    (asset === "fund" || p.test(r)) && (region === "all" || r.region === region)
+    (asset === "fund" || p.test(r)) && (region === "all" || r.region === region || (region === "EM" && EM.has(r.region))
+      || (region.startsWith("G:") && (r.region_group ?? regionGroup(r.region)) === region.slice(2)))
     && (asset === "fund" ? (fclass === "all" || r.fund_asset_class === fclass || (fclass === "active" && r.style === "active"))
       : (sector === "all" || r.sector === sector) && (index === "all" || (r.indices ?? []).includes(index)))
     && (!search || `${r.symbol} ${r.name ?? ""} ${r.cohort ?? ""}`.toLowerCase().includes(search.toLowerCase()))),
@@ -141,10 +147,11 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-end justify-between gap-3">
+      <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-ink">Daily discovery</h1>
-          <p className="mt-0.5 text-sm text-ink2">
+          <div className="label mb-1 text-accent-ink">Research shortlist · {m?.stocks ?? "—"} stocks across {Object.keys(m?.cohort_by_region ?? {}).length || "—"} markets</div>
+          <h1 className="text-[28px] font-semibold tracking-tight text-ink">Daily discovery</h1>
+          <p className="mt-1 text-sm text-ink2">
             {d?.run ? <>Snapshot {dateFmt(d.run.created_at, true)} ({ago(d.run.created_at)}) · {m?.stocks ?? "—"} stocks, {m?.funds ?? 0} funds ·{" "}
               {m?.eligible_core} stocks eligible for core_v1{m?.failed ? `, ${m.failed} failed` : ""}</> : "No snapshot yet"}
           </p>
@@ -160,10 +167,9 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <div className="flex gap-1 border-b border-line" role="tablist" aria-label="Asset class">
+      <div className="seg" role="tablist" aria-label="Asset class">
         {([["stock", "Stocks"], ["fund", "ETFs & funds"]] as const).map(([k, l]) => (
-          <button key={k} role="tab" aria-selected={asset === k} onClick={() => { setAsset(k); setSelected([]); }}
-            className={`border-b-2 px-4 py-2 text-sm ${asset === k ? "border-accent font-semibold text-ink" : "border-transparent text-ink2 hover:text-ink"}`}>{l}</button>))}
+          <button key={k} role="tab" aria-selected={asset === k} onClick={() => { setAsset(k); setSelected([]); }}>{l}</button>))}
       </div>
 
       {d?.state === "first_run_backfill" ? (
@@ -185,14 +191,16 @@ export default function DashboardPage() {
                 <Stat label="Reference FX" value={<span className="tnum">USD/CAD {num(m?.fx.USDCAD, 4)}</span>}
                   sub={`GBP/CAD ${num(m?.fx.GBPCAD, 4)} · ${m?.fx.provider ?? "—"} ${m?.fx.as_of ?? ""}`} />
               </div>
-              <div className="grid gap-4 lg:grid-cols-[1.6fr_1fr]">
-                <section className="card p-4" aria-labelledby="vq">
+              <div className="grid gap-4 xl:grid-cols-[1.7fr_1fr]">
+                <section className="card p-5" aria-labelledby="vq">
                   <h2 id="vq" className="text-sm font-semibold text-ink">Value vs quality</h2>
                   <p className="mb-2 text-xs text-muted">Component percentiles vs sector peers · {filtered.filter((r) => r.core.score !== null).length} scored stocks in current filter · top 12 labelled</p>
                   <ValueQualityScatter rows={filtered.filter((r) => r.core.score !== null)} />
                 </section>
-                {d ? <ChangesPanel d={d} /> : null}
+                <NewsStream title="Market pulse" items={pulse.data?.items ?? []} showSymbol loading={pulse.isLoading} maxHeight={372}
+                  subtitle={<>Breaking, decision-relevant headlines across your watchlist and today&apos;s candidates · auto-refreshes</>} />
               </div>
+              {d ? <ChangesPanel d={d} /> : null}
             </>
           ) : (
             <Note>Funds are ranked <b>within their cohort</b> (same benchmark or strategy), led by cost — the most persistent predictor of fund outcomes.
@@ -217,7 +225,10 @@ export default function DashboardPage() {
               <div className="ml-auto flex flex-wrap items-center gap-2">
                 <input className="input w-40" placeholder="Search" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search" />
                 <select className="input" value={region} onChange={(e) => setRegion(e.target.value)} aria-label="Market">
-                  <option value="all">All markets</option><option value="US">US</option><option value="CA">Canada</option><option value="UK">UK</option>
+                  <option value="all">All markets</option>
+                  <optgroup label="Regions"><option value="G:Americas">Americas</option><option value="G:Europe">Europe</option>
+                    <option value="G:Asia-Pacific">Asia-Pacific</option><option value="EM">Emerging markets</option></optgroup>
+                  <optgroup label="Markets">{Object.entries(REGION_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</optgroup>
                 </select>
                 {asset === "stock" ? (
                   <>
@@ -249,7 +260,7 @@ export default function DashboardPage() {
       )}
 
       {selected.length ? (
-        <div className="fixed inset-x-0 bottom-4 z-40 mx-auto flex w-fit max-w-[95vw] flex-wrap items-center gap-2 rounded-xl border border-line bg-raised px-4 py-2.5 shadow-2xl">
+        <div className="glass animate-in fixed inset-x-0 bottom-5 z-40 mx-auto flex w-fit max-w-[95vw] flex-wrap items-center gap-2 rounded-2xl border border-line px-4 py-2.5" style={{ boxShadow: "var(--shadow-lg)" }}>
           <span className="text-sm text-ink2">{selected.length} selected</span>
           {selected.map((id) => {
             const r = rows.find((x) => x.id === id);
@@ -266,13 +277,13 @@ export default function DashboardPage() {
 function ChangesPanel({ d }: { d: Dashboard }) {
   const m = d.run?.manifest;
   return (
-    <section className="card p-4" aria-labelledby="chg">
-      <h2 id="chg" className="text-sm font-semibold text-ink">Significant changes</h2>
+    <section className="card grid gap-5 p-5 lg:grid-cols-[2fr_1fr]" aria-labelledby="chg">
+      <div>
+      <h2 id="chg" className="text-sm font-semibold text-ink">Significant changes <span className="font-normal text-muted">vs the last daily snapshot</span></h2>
       {!d.changes?.compared_to ? (
         <p className="mt-3 text-sm text-ink2">First published snapshot for this universe. Entrants, exits and rank moves appear after the next run.</p>
       ) : (
-        <div className="mt-2 space-y-3 text-sm">
-          <p className="text-xs text-muted">vs snapshot {dateFmt(d.changes.compared_to.created_at, true)}</p>
+        <div className="mt-3 grid gap-4 text-sm md:grid-cols-3">
           {([["New on shortlist (≥ 60)", d.changes.entrants], ["Left shortlist", d.changes.exits]] as const).map(([t, list]) => (
             <div key={t}><div className="label mb-1">{t}</div>
               {list.length ? list.slice(0, 12).map((e) => <Link key={e.id} href={`/instrument/${e.id}`} className="chip mb-1 mr-1">{e.symbol} {isNum(e.score) ? e.score.toFixed(0) : ""}</Link>)
@@ -288,7 +299,8 @@ function ChangesPanel({ d }: { d: Dashboard }) {
           </div>
         </div>
       )}
-      <div className="mt-4 border-t border-line pt-3">
+      </div>
+      <div className="lg:border-l lg:border-line lg:pl-5">
         <div className="label mb-1.5">Model notes</div>
         <ul className="space-y-1 text-xs text-ink2">
           <li>Core = Value 30 · Quality 25 · Growth 20 · Resilience 15 · Momentum 10, percentiles vs sector peers.</li>

@@ -22,7 +22,7 @@ from ..providers.canonical import normalise_quote_currency
 from ..providers.registry import providers
 from ..services import jobs
 from ..services.analysis import SHORTLIST_THRESHOLD, clean_json, make_row
-from ..services.ingest import MACRO, datasets_for, ensure_instrument
+from ..services.ingest import MACRO, datasets_for, ensure_instrument, load_prices
 
 router = APIRouter(prefix="/v1")
 _row_cache: dict[tuple[str, str], list[dict]] = {}
@@ -66,7 +66,8 @@ def _row(p: dict, watch: set[str]) -> dict:
 def dashboard(asset: Literal["stock", "fund"] = "stock"):
     with SessionLocal() as s:
         run = latest_completed_run(s)
-        prev = latest_completed_run(s, offset=1)
+        from ..services.analysis import latest_daily_run
+        prev = latest_daily_run(s, before=run.created_at) if run else None
         watch = {w.instrument_id for w in s.scalars(select(WatchlistItem))}
         active = s.scalars(select(Job).where(Job.status.in_(jobs.ACTIVE)).order_by(Job.created_at.desc())).first()
         last_job = s.scalars(select(Job).order_by(Job.created_at.desc()).limit(1)).first()
@@ -174,19 +175,20 @@ def analysis(iid: str):
 def prices(iid: str, range: Literal["1y", "3y", "5y", "10y"] = "5y"):
     with SessionLocal() as s:
         inst = s.get(Instrument, iid)
-        snap = latest_snapshot(s, iid, "prices")
-        if not inst or not snap:
+        pp = load_prices(s, iid)
+        if not inst or not pp:
             raise HTTPException(404, "No prices")
         prof = latest_snapshot(s, iid, "profile")
         ccy, scale = normalise_quote_currency((prof.payload if prof else {}).get("quote_currency")
-                                              or snap.payload.get("quote_currency") or inst.currency)
-        df, _ = bars_frame(snap.payload, inst.region or "US", scale)
+                                              or pp.get("quote_currency") or inst.currency)
+        df, _ = bars_frame(pp, inst.region or "US", scale)
         years = int(range[:-1])
         df = df[df.index >= df.index[-1] - pd.Timedelta(days=365 * years)]
         if years >= 5:
             df = df.resample("W-FRI").last().dropna(subset=["c"])
         dd = df["ac"] / df["ac"].cummax() - 1
-        return clean_json({"currency": ccy, "provider": snap.provider, "adjustment": snap.payload.get("adjustment"),
+        return clean_json({"currency": ccy, "provider": "yahoo" if pp.get("quote_fetched_at") else (latest_snapshot(s, iid, "prices").provider),
+                           "adjustment": pp.get("adjustment"),
                            "bars": [{"d": d.date().isoformat(), "c": r.c, "ac": r.ac, "v": r.v, "dd": dd.loc[d]}
                                     for d, r in df.iterrows()]})
 
@@ -219,11 +221,11 @@ def compare(req: CompareReq):
             items.append(_row(p, set()) | {"scores": p.get("scores"), "financial_currency": p.get("financial_currency"),
                                            "metrics": p.get("metrics") or {}})  # full set, not the table subset
             inst = s.get(Instrument, iid)
-            snap = latest_snapshot(s, iid, "prices")
-            if not snap:
+            pp = load_prices(s, iid)
+            if not pp:
                 continue
             ccy, scale = normalise_quote_currency(p.get("quote_currency_raw"))
-            df, _ = bars_frame(snap.payload, inst.region or "US", scale)
+            df, _ = bars_frame(pp, inst.region or "US", scale)
             conv = fx.series_rate(ccy, req.currency, df.index)
             series[p["symbol"]] = {"local": df["ac"], "conv": df["ac"] * conv if conv is not None else None}
         years = int(req.window[:-1])
@@ -496,7 +498,8 @@ def export_csv(asset: Literal["stock", "fund"]):
 
 # ------------------------------------------------------------------------------------------------ settings (FR11)
 class SettingsReq(BaseModel):
-    universe: Literal["starter", "core", "extended"] | None = None
+    universe: Literal["starter", "core", "global", "extended"] | None = None
+    intraday_minutes: int | None = Field(None, ge=0, le=240)
     discovery_time: str | None = Field(None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     timezone: str | None = None
 
@@ -507,6 +510,7 @@ def get_settings_api():
         return {"universe": get_setting(s, "universe", get_settings().universe),
                 "discovery_time": get_setting(s, "discovery_time", "04:00"),
                 "timezone": get_setting(s, "timezone", "America/Toronto"),
+                "intraday_minutes": get_setting(s, "intraday_minutes", 20),
                 "presentation_currency": get_settings().presentation_currency}
 
 
@@ -519,7 +523,7 @@ def put_settings_api(req: SettingsReq):
         except ZoneInfoNotFoundError:
             raise HTTPException(422, f"Unknown IANA time zone {req.timezone}")
     with SessionLocal() as s:
-        for k in ("universe", "discovery_time", "timezone"):
+        for k in ("universe", "discovery_time", "timezone", "intraday_minutes"):
             v = getattr(req, k)
             if v is not None:
                 put_setting(s, k, v)
@@ -555,13 +559,13 @@ def tracking_series(iid: str, years: int = Query(3, ge=1, le=10)):
         if not idx_sym:
             return {"available": False, "reason": "No total-return index mapped for this fund's cohort"}
         idx_inst = s.scalars(select(Instrument).where(Instrument.symbol == idx_sym)).first()
-        fs, is_ = latest_snapshot(s, iid, "prices"), latest_snapshot(s, idx_inst.id, "prices") if idx_inst else None
+        fs, is_ = load_prices(s, iid), load_prices(s, idx_inst.id) if idx_inst else None
         if not fs or not is_:
             return {"available": False, "reason": "Price history missing"}
         prof = latest_snapshot(s, iid, "profile")
         ccy, sc = normalise_quote_currency((prof.payload or {}).get("quote_currency") if prof else inst.currency)
-        f = bars_frame(fs.payload, inst.region or "US", sc)[0]["ac"]
-        i = bars_frame(is_.payload, "US", 1.0)[0]["ac"]
+        f = bars_frame(fs, inst.region or "US", sc)[0]["ac"]
+        i = bars_frame(is_, "US", 1.0)[0]["ac"]
         fx_snap = latest_snapshot(s, MACRO, "fx")
         fx = FXTable(fx_snap.payload if fx_snap else None)
         if not meta.get("hedged") and ccy != "USD":
@@ -606,3 +610,93 @@ def save_scenario(iid: str, req: ScenarioReq):
         s.add(sc)
         s.commit()
         return {"id": sc.id, "name": sc.name, "version": sc.version, "created_at": sc.created_at.isoformat()}
+
+
+# ------------------------------------------------------------------------------------------------ live (auto-refresh)
+def _news_stream(s, inst: Instrument, limit: int = 40) -> tuple[list[dict], dict | None]:
+    from ..services.news import tag_items
+    snap = latest_snapshot(s, inst.id, "news")
+    items = tag_items(((snap.payload or {}).get("items") or [])[:limit]) if snap else []
+
+    def ts(it):
+        v = it.get("published_at")
+        return str(v) if v is not None else ""
+    items.sort(key=ts, reverse=True)
+    meta = {"provider": snap.provider, "fetched_at": snap.fetched_at.isoformat(), "status": snap.status} if snap else None
+    return items, meta
+
+
+@router.get("/instruments/{iid}/live")
+def live(iid: str):
+    """Fast read from the DB + a background refresh if the quote/news are stale (never blocks on providers)."""
+    from ..analytics.market import live_quote
+    from ..services import live as live_svc
+    with SessionLocal() as s:
+        inst = s.get(Instrument, iid)
+        if not inst:
+            raise HTTPException(404, "Instrument not found")
+        refreshing = live_svc.ensure_fresh(iid)
+        pp = load_prices(s, iid) or {}
+        prof = latest_snapshot(s, iid, "profile")
+        ccy, scale = normalise_quote_currency(((prof.payload or {}) if prof else {}).get("quote_currency") or inst.currency)
+        q = live_quote(pp, inst.region or "US", scale) if pp else None
+        if q:
+            q.update({"currency": ccy, "fetched_at": pp.get("quote_fetched_at")})
+        news, meta = _news_stream(s, inst)
+        base = inst.symbol.split(".")[0]
+        return clean_json({
+            "quote": q, "news": news, "news_source": meta, "refreshing": refreshing,
+            "social": {  # link-outs only: no unlicensed social scraping (spec §4)
+                "x_live": f"https://x.com/search?q=%24{base}&f=live",
+                "stocktwits": f"https://stocktwits.com/symbol/{base}",
+                "note": "Embedded social streams need a licensed API (X API Basic ≈ USD 200/mo); links open live posts."}})
+
+
+@router.get("/pulse")
+def pulse(limit: int = Query(30, le=100)):
+    """Breaking news (critical/high severity) across the watchlist and today's discovery candidates, newest first."""
+    with SessionLocal() as s:
+        run = latest_completed_run(s)
+        watch = {w.instrument_id for w in s.scalars(select(WatchlistItem))}
+        ids = set(watch)
+        if run:
+            rows = _rows(s, run.id, "stock")
+            ranked = sorted([r for r in rows if r["core"]["score"] is not None], key=lambda r: -r["core"]["score"])[:40]
+            ids |= {r["id"] for r in ranked} | {r["id"] for r in rows if r.get("discovery")}
+        out = []
+        for iid in list(ids)[:200]:
+            inst = s.get(Instrument, iid)
+            if not inst:
+                continue
+            items, _ = _news_stream(s, inst, limit=15)
+            for it in items:
+                if it["severity"] in ("critical", "high"):
+                    out.append({**it, "symbol": inst.symbol, "instrument_id": iid, "watch": iid in watch})
+        out.sort(key=lambda x: (str(x.get("published_at") or "")), reverse=True)
+        seen, dedup = set(), []
+        for it in out:
+            k = (it.get("title") or "").lower()[:80]
+            if k not in seen:
+                seen.add(k)
+                dedup.append(it)
+        return clean_json({"items": dedup[:limit], "scope": f"{len(ids)} instruments (watchlist + top candidates)"})
+
+
+@router.post("/quote-refreshes", status_code=202)
+def quote_refresh(mode: Literal["open_markets", "force"] = "open_markets"):
+    job, dedup = jobs.submit("refresh_quotes", None, None, "force" if mode == "force" else "if_stale")
+    return {**_job_dict(job), "deduplicated": dedup}
+
+
+@router.get("/status")
+def status():
+    """Tiny poll target for the UI's live indicator."""
+    from ..analytics.market import market_open
+    from ..services.universe import BENCHMARKS
+    with SessionLocal() as s:
+        run = latest_completed_run(s)
+        active = s.scalars(select(Job).where(Job.status.in_(jobs.ACTIVE)).order_by(Job.created_at.desc())).first()
+        return {"run_id": run.id if run else None, "run_at": run.created_at.isoformat() if run else None,
+                "run_kind": ((run.manifest or {}).get("kind", "daily")) if run else None,
+                "active_job": _job_dict(active), "markets_open": [r for r in BENCHMARKS if market_open(r)],
+                "intraday_minutes": get_setting(s, "intraday_minutes", 20)}

@@ -71,13 +71,29 @@ def clean_fields(d: dict[str, Any]) -> dict[str, float]:
     return out
 
 
+SUFFIX_REGION = {
+    "TO": "CA", "V": "CA", "NE": "CA", "CN": "CA",
+    "L": "UK", "IL": "UK",
+    "DE": "EU", "F": "EU", "PA": "EU", "AS": "EU", "MC": "EU", "MI": "EU", "BR": "EU", "HE": "EU", "IR": "EU",
+    "VI": "EU", "LS": "EU", "CO": "EU", "ST": "EU", "OL": "EU",
+    "SW": "CH", "AX": "AU", "HK": "HK", "SS": "CN", "SZ": "CN", "NS": "IN", "BO": "IN",
+    "T": "JP", "KS": "KR", "KQ": "KR", "TW": "TW", "TWO": "TW", "SA": "BR", "SI": "SG", "JO": "ZA", "MX": "MX",
+}
+# Markets grouped for charts (≤ 3 categorical colours are colour-safe in scatter plots)
+REGION_GROUP = {"US": "Americas", "CA": "Americas", "BR": "Americas", "MX": "Americas",
+                "UK": "Europe", "EU": "Europe", "CH": "Europe", "ZA": "Europe"}
+EMERGING = {"CN", "IN", "BR", "KR", "TW", "MX", "ZA"}
+
+
 def region_of(symbol: str) -> str:
     s = symbol.upper()
-    if s.endswith(".TO") or s.endswith(".V") or s.endswith(".NE") or s.endswith(".CN"):
-        return "CA"
-    if s.endswith(".L") or s.endswith(".IL"):
-        return "UK"
+    if "." in s and not s.startswith("^"):
+        return SUFFIX_REGION.get(s.rsplit(".", 1)[1], "US")
     return "US"
+
+
+def region_group(region: str | None) -> str:
+    return REGION_GROUP.get(region or "US", "Asia-Pacific")
 
 
 def split_symbol(symbol: str) -> tuple[str, str]:

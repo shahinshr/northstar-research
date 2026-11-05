@@ -1,8 +1,8 @@
 "use client";
 
 import { AlertTriangle, Info } from "lucide-react";
-import type { Metric } from "@/lib/api";
-import { fmtMetric, isNum, type Fmt } from "@/lib/format";
+import type { LiveQuote, Metric } from "@/lib/api";
+import { fmtMetric, isNum, num, pct, type Fmt } from "@/lib/format";
 import { METRICS } from "@/lib/metrics";
 
 /** Score 0-100 as a thin bar + number. Null renders an explicit reason, never zero. */
@@ -13,7 +13,7 @@ export function ScoreBar({ score, reason, width = 72, label }: { score: number |
   return (
     <span className="inline-flex items-center gap-2" title={label ? `${label}: ${score.toFixed(1)} / 100 (peer percentile composite)` : undefined}>
       <span className="relative h-1.5 rounded-full bg-grid" style={{ width }} aria-hidden>
-        <span className="absolute inset-y-0 left-0 rounded-full bg-accent" style={{ width: `${Math.max(2, score)}%` }} />
+        <span className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${Math.max(2, score)}%`, background: "linear-gradient(90deg, var(--accent), var(--accent-2))" }} />
       </span>
       <span className="tnum text-sm font-semibold text-ink">{score.toFixed(1)}</span>
     </span>
@@ -46,8 +46,9 @@ export function Flags({ flags }: { flags: string[] }) {
 
 export function Note({ children, tone = "info" }: { children: React.ReactNode; tone?: "info" | "warn" }) {
   return (
-    <div className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs ${tone === "warn" ? "border-serious text-ink2" : "border-line text-ink2"}`}
-      style={tone === "warn" ? { background: "color-mix(in srgb, var(--serious) 8%, transparent)" } : { background: "var(--page)" }}>
+    <div className={`flex items-start gap-2.5 rounded-xl border px-3.5 py-2.5 text-xs leading-relaxed ${tone === "warn" ? "text-ink2" : "border-line text-ink2"}`}
+      style={tone === "warn" ? { background: "color-mix(in srgb, var(--serious) 8%, var(--surface))", borderColor: "color-mix(in srgb, var(--serious) 45%, var(--line))" }
+        : { background: "color-mix(in srgb, var(--accent) 5%, var(--surface))" }}>
       {tone === "warn" ? <AlertTriangle size={14} className="mt-0.5 shrink-0 text-serious" aria-hidden /> : <Info size={14} className="mt-0.5 shrink-0 text-accent" aria-hidden />}
       <div>{children}</div>
     </div>
@@ -65,18 +66,21 @@ export function Confidence({ c }: { c: { score: number; label: string; note?: st
   );
 }
 
-export function Stat({ label, value, sub, title }: { label: string; value: React.ReactNode; sub?: React.ReactNode; title?: string }) {
+export function Stat({ label, value, sub, title, icon }: { label: string; value: React.ReactNode; sub?: React.ReactNode; title?: string; icon?: React.ReactNode }) {
   return (
-    <div className="card px-4 py-3" title={title}>
-      <div className="label">{label}</div>
-      <div className="mt-1 text-xl font-semibold text-ink">{value}</div>
-      {sub ? <div className="mt-0.5 text-xs text-muted">{sub}</div> : null}
+    <div className="card card-hover relative overflow-hidden px-4 py-3.5" title={title}>
+      <div className="flex items-center gap-2">
+        {icon ? <span className="grid h-6 w-6 place-items-center rounded-lg text-accent" style={{ background: "color-mix(in srgb, var(--accent) 12%, var(--surface))" }}>{icon}</span> : null}
+        <div className="label">{label}</div>
+      </div>
+      <div className="mt-1.5 text-[22px] font-semibold leading-tight tracking-tight text-ink">{value}</div>
+      {sub ? <div className="mt-1 text-xs text-muted">{sub}</div> : null}
     </div>
   );
 }
 
 export function Skeleton({ className = "" }: { className?: string }) {
-  return <div className={`animate-pulse rounded-lg bg-grid ${className}`} />;
+  return <div className={`shimmer rounded-xl ${className}`} />;
 }
 
 export function Empty({ title, children }: { title: string; children?: React.ReactNode }) {
@@ -88,11 +92,38 @@ export function Empty({ title, children }: { title: string; children?: React.Rea
   );
 }
 
+const GROUP_COLOR: Record<string, string> = { Americas: "var(--s1)", Europe: "var(--s3)", "Asia-Pacific": "var(--s2)" };
+const REGION_GROUP: Record<string, string> = { US: "Americas", CA: "Americas", BR: "Americas", MX: "Americas", UK: "Europe", EU: "Europe", CH: "Europe", ZA: "Europe" };
+export const regionGroup = (r: string) => REGION_GROUP[r] ?? "Asia-Pacific";
+export const groupColor = (g: string) => GROUP_COLOR[g] ?? "var(--s2)";
+
 export function RegionDot({ region }: { region: string }) {
-  const c = region === "US" ? "var(--s1)" : region === "CA" ? "var(--s2)" : "var(--s3)";
+  const g = regionGroup(region);
   return (
-    <span className="inline-flex items-center gap-1.5 text-xs text-ink2">
-      <span className="inline-block h-2 w-2 rounded-full" style={{ background: c }} aria-hidden />{region}
+    <span className="inline-flex items-center gap-1.5 text-xs text-ink2" title={g}>
+      <span className="inline-block h-2 w-2 rounded-full" style={{ background: groupColor(g) }} aria-hidden />{region}
+    </span>
+  );
+}
+
+/** Official close, or a provisional intraday quote (delayed; never used in scores) with a live dot. */
+export function LivePrice({ official, currency, live, size = "sm" }: { official: number | null | undefined; currency: string; live?: LiveQuote | null; size?: "sm" | "lg" }) {
+  const isLive = !!live?.provisional;
+  const v = isLive ? live!.price : official;
+  const ch = isLive ? live!.change : undefined;
+  if (size === "lg") {
+    return (
+      <span className="inline-flex items-baseline gap-2">
+        {isLive ? <span className="live-dot self-center" title={live!.note} aria-label="Live intraday quote" /> : null}
+        <span className="tnum text-3xl font-semibold tracking-tight text-ink">{num(v)}</span>
+        <span className="text-base font-normal text-muted">{currency}</span>
+      </span>);
+  }
+  return (
+    <span className="tnum inline-flex items-center gap-1" title={isLive ? live!.note : "Last completed session close"}>
+      {isLive ? <span className="live-dot" style={{ width: 6, height: 6 }} aria-hidden /> : null}
+      {num(v)} <span className="text-2xs text-muted">{currency}</span>
+      {isNum(ch) ? <span className={`text-2xs ${ch >= 0 ? "text-up" : "text-down"}`}>{pct(ch, 1, true)}</span> : null}
     </span>
   );
 }

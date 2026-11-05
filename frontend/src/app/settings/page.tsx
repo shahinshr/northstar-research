@@ -23,11 +23,13 @@ export default function SettingsPage() {
           <legend className="label mb-2">Stock universe</legend>
           {([["starter", "Starter — 17 hand-picked stocks (fast, for testing)"],
             ["core", "Core — S&P 500 + S&P/TSX Composite + FTSE 100 (~820 stocks)"],
-            ["extended", "Extended — core + FTSE 250 (~1,070 stocks)"]] as const).map(([k, l]) => (
+            ["global", "Global — core + ASX 200, Hang Seng, SSE 50, NIFTY 50, DAX, CAC 40, SMI, Euro Stoxx 50 (~1,150)"],
+            ["extended", "Extended — global + FTSE 250 + CSI 300 China A-shares (~1,700)"]] as const).map(([k, l]) => (
             <label key={k} className="flex items-center gap-2 py-1 text-sm text-ink">
               <input type="radio" name="universe" checked={form.universe === k} onChange={() => setForm({ ...form, universe: k })} />{l}
             </label>))}
-          <p className="mt-1 text-xs text-muted">The 64-fund catalogue and your watchlist/added tickers are always included. Changes apply on the next discovery run.</p>
+          <p className="mt-1 text-xs text-muted">The fund catalogue (incl. China, India, Japan, Europe, EM ETFs) and your watchlist/added tickers are always included.
+            Changes apply on the next discovery run. Larger universes take longer to refresh on free data sources.</p>
         </fieldset>
         <div className="grid grid-cols-2 gap-4">
           <label className="text-sm text-ink"><span className="label mb-1 block">Daily discovery time</span>
@@ -37,6 +39,13 @@ export default function SettingsPage() {
               {[...new Set([form.timezone, ...ZONES])].map((z) => <option key={z}>{z}</option>)}
             </select></label>
         </div>
+        <label className="block text-sm text-ink"><span className="label mb-1 block">Auto-refresh while markets are open</span>
+          <select className="input w-full" value={form.intraday_minutes} onChange={(e) => setForm({ ...form, intraday_minutes: Number(e.target.value) })}>
+            {[[0, "Off — daily discovery only"], [10, "Every 10 minutes"], [20, "Every 20 minutes (recommended)"], [30, "Every 30 minutes"], [60, "Every hour"]].map(([v, l]) =>
+              <option key={v} value={v}>{l}</option>)}
+          </select>
+          <span className="mt-1 block text-xs text-muted">Refreshes delayed quotes and breaking news for open markets, then recalculates from the database.
+            Fundamentals stay on the daily run, so providers are not hammered.</span></label>
         <p className="text-xs text-muted">Wall-clock schedule (not a 24-hour interval), so it stays correct across daylight-saving changes. Presentation currency: {form.presentation_currency}.</p>
         <button className="btn-primary" disabled={save.isPending}>{save.isPending ? "Saving…" : "Save settings"}</button>
         {save.isSuccess ? <span className="ml-3 text-sm text-up">Saved</span> : null}

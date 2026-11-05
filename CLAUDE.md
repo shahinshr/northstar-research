@@ -5,8 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A private investment research dashboard implementing `Investment_Research_App_Specification.md` (the spec; section
-numbers like "spec §7" in code comments refer to it). The universe is ~820 US/CA/UK stocks plus a 64-fund curated
-catalogue. It runs on free data sources with multi-provider fallback. `docs/strategy.md` explains why the models look the
+numbers like "spec §7" in code comments refer to it). The default `global` universe is ~1,150 stocks: US/CA/UK plus
+ASX 200, Hang Seng, SSE 50, NIFTY 50, DAX, CAC 40, SMI and Euro Stoxx 50. There is also a ~90-fund curated
+catalogue that includes China, India, Japan, Europe and emerging-market ETFs. It runs on free data sources with multi-provider fallback. `docs/strategy.md` explains why the models look the
 way they do and records validation results. `docs/data-sources.md` and `docs/api-keys.md` cover the providers.
 
 ## Commands
@@ -34,6 +35,8 @@ npx tsc --noEmit && npx eslint src --quiet             # type-check + lint (use 
   (40–60 min; free Yahoo throttles).
 - **Deep links for screenshots:** `/instrument/<id>?tab=valuation`, `/?asset=fund`, `?theme=dark`. Headless Chrome works:
   `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --virtual-time-budget=30000 --screenshot=...`
+- **Dev-server caching:** after editing `tailwind.config.ts`, restart `npm run dev` and `rm -rf .next`; the dev server
+  caches the config and fails with "class does not exist".
 - **Data and config locations:** SQLite DB at `backend/data/app.db`. API keys go in `backend/.env` (template
   `.env.example`). Keep `# comments` on their own lines there: python-dotenv reads `KEY=  # comment` as the value.
 
@@ -51,6 +54,25 @@ npx tsc --noEmit && npx eslint src --quiet             # type-check + lint (use 
    `payload` plus a slim `row` used by the dashboard.
 5. The API always serves the latest *completed* run. A quality gate refuses to publish if coverage collapses.
 
+### Freshness (auto-refresh without hammering providers)
+- **Daily run:** fundamentals refresh on the daily discovery job (04:00 Toronto, `DailyScheduler`).
+- **Intraday job:** `IntradayScheduler` submits a `refresh_quotes` job every `intraday_minutes` (setting, default 20)
+  while any market is open. It bulk-fetches 5-day bars into a small `quote` dataset, never rewriting the 10-year
+  `prices`. It also refreshes news for the watchlist plus the top 40, then runs `compute_run(kind="intraday")`.
+- **Price merge:** always read prices through `ingest.load_prices`, which merges the `quote` bars over the history and
+  chains adjusted closes from the last stored bar. Today's unfinished bar is exposed as a *provisional* `live` quote and
+  is never used in scores.
+- **On-view refresh:** `services/live.py` refreshes the quote and news of the instrument being viewed, on its own small
+  pool (dedup + 5-minute gap). `GET /v1/instruments/{id}/live` always answers from the DB immediately.
+- **Run kinds:** each `AnalysisRun.manifest.kind` is `daily` or `intraday`. Alerts and "changes" compare against
+  `latest_daily_run`, so intraday price moves don't spam alerts. `prune_runs` keeps a few intraday runs and 30 days of
+  daily runs.
+- **Frontend polling:** `Nav`'s `LiveStatus` polls `/v1/status` and invalidates queries when a new run id appears.
+  Pages also poll (dashboard 60 s, live quote/news 30 s).
+- **News tagging:** `services/news.py` is a transparent lexicon (severity, tags, polarity). News text is untrusted and
+  only classified. `/v1/pulse` gathers critical/high stories across the watchlist and candidates. Social feeds are
+  link-outs only: X API is paid, and StockTwits is Cloudflare-blocked.
+
 ### Providers (`app/providers/`)
 - **Adapter contract:** each adapter subclasses `Provider` and implements `fetch_<dataset>(symbol, region)`. It returns
   canonical payloads (shapes documented in `canonical.py`) or raises a typed `ProviderError` (`ErrorCode`).
@@ -59,8 +81,12 @@ npx tsc --noEmit && npx eslint src --quiet             # type-check + lint (use 
   providers are skipped. Partial results are kept only as a fallback while later providers are tried for a fully valid one.
 - **Datasets:** `profile, prices, financials, estimates, price_targets, news, fund_profile, holdings`, plus macro `fx`,
   `cash_rates` and `constituents` stored under subject `"macro"`.
-- **Ticker format:** canonical symbols are Yahoo-style (`RY.TO`, `VOD.L`, `BRK-B`). Adapters map to their own formats
-  (e.g. EODHD `VOD.LSE`).
+- **Ticker format:** canonical symbols are Yahoo-style (`RY.TO`, `VOD.L`, `BRK-B`, `0700.HK`, `600519.SS`). Adapters
+  map to their own formats (e.g. EODHD `VOD.LSE`).
+- **Regions:** `canonical.region_of` maps the suffix to a region (US, CA, UK, EU, CH, AU, HK, CN, IN…). Charts colour
+  by the three `region_group`s, the colour-safe maximum for scatter plots.
+- **Exchange hours:** `analytics/market.EXCHANGE_CLOSE` / `market_open` hold per-region hours. A new region needs an
+  entry there, a `BENCHMARKS` proxy and FX coverage in `macro.FX_CCYS`.
 
 ### Analytics (`app/analytics/`): pure functions, unit-tested
 - **Metric shape:** every metric is `M(value, basis, status, reason)` with status `valid | nm | na`. The UI renders N/M or

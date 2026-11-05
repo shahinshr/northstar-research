@@ -264,7 +264,7 @@ class YahooProvider(Provider):
         return self._wrap(go)
 
     # ---------------------------------------------------------------- bulk prices (spec §11: bulk delivery)
-    def fetch_prices_bulk(self, symbols: list[str], period: str = "10y") -> dict[str, dict]:
+    def fetch_prices_bulk(self, symbols: list[str], period: str = "10y", min_bars: int = 30) -> dict[str, dict]:
         """One request per chunk of tickers. Returns {symbol: canonical prices payload}; misses are omitted."""
         import yfinance as yf
         out: dict[str, dict] = {}
@@ -285,7 +285,7 @@ class YahooProvider(Provider):
                     continue
                 h = h.dropna(subset=["Close"])
                 h = h[h["Close"] > 0]
-                if len(h) < 30:
+                if len(h) < min_bars:
                     continue
                 idx = [ts.date().isoformat() for ts in h.index]
                 out[sym] = {

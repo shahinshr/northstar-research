@@ -17,8 +17,25 @@ import pandas as pd
 
 from .fundamentals import M
 
+# local close + ~30 min buffer: a bar dated "today" is provisional until then (spec §6)
 EXCHANGE_CLOSE = {"US": ("America/New_York", time(16, 30)), "CA": ("America/Toronto", time(16, 30)),
-                  "UK": ("Europe/London", time(17, 0))}
+                  "UK": ("Europe/London", time(17, 0)), "EU": ("Europe/Berlin", time(18, 0)),
+                  "CH": ("Europe/Zurich", time(18, 0)), "AU": ("Australia/Sydney", time(16, 40)),
+                  "HK": ("Asia/Hong_Kong", time(16, 40)), "CN": ("Asia/Shanghai", time(15, 30)),
+                  "IN": ("Asia/Kolkata", time(16, 0)), "JP": ("Asia/Tokyo", time(15, 45)),
+                  "KR": ("Asia/Seoul", time(16, 0)), "TW": ("Asia/Taipei", time(14, 0)),
+                  "BR": ("America/Sao_Paulo", time(18, 0)), "SG": ("Asia/Singapore", time(17, 30)),
+                  "ZA": ("Africa/Johannesburg", time(17, 30)), "MX": ("America/Mexico_City", time(15, 30))}
+EXCHANGE_OPEN = {"US": time(9, 30), "CA": time(9, 30), "UK": time(8, 0), "EU": time(9, 0), "CH": time(9, 0),
+                 "AU": time(10, 0), "HK": time(9, 30), "CN": time(9, 30), "IN": time(9, 15), "JP": time(9, 0),
+                 "KR": time(9, 0), "TW": time(9, 0), "BR": time(10, 0), "SG": time(9, 0), "ZA": time(9, 0), "MX": time(8, 30)}
+
+
+def market_open(region: str, now: datetime | None = None) -> bool:
+    """Approximate regular-session check (weekdays, local open → close+buffer; holidays not modelled)."""
+    tz, close_t = EXCHANGE_CLOSE.get(region, EXCHANGE_CLOSE["US"])
+    local = (now or datetime.now(ZoneInfo("UTC"))).astimezone(ZoneInfo(tz))
+    return local.weekday() < 5 and EXCHANGE_OPEN.get(region, time(9, 30)) <= local.time() <= close_t
 TD = 252
 
 
@@ -163,3 +180,22 @@ def dividend_yield(prices: dict, scale: float, price: float, last_date: pd.Times
     if total <= 0:
         return M(0.0, "no cash dividends in trailing 12 months")
     return M(total / price, "trailing 12m cash dividends / price")
+
+
+def live_quote(prices: dict, region: str, scale: float) -> dict | None:
+    """Latest bar if it belongs to today's still-open session: shown as a provisional, delayed quote and
+    never used in the official end-of-day scores (spec §6)."""
+    bars = prices.get("bars") or []
+    df = pd.DataFrame(bars)
+    if df.empty or len(df) < 2:
+        return None
+    df["d"] = pd.to_datetime(df["d"])
+    df = df.drop_duplicates("d", keep="last").sort_values("d")
+    tz, close_t = EXCHANGE_CLOSE.get(region, EXCHANGE_CLOSE["US"])
+    now_local = datetime.now(ZoneInfo(tz))
+    last, prev = df.iloc[-1], df.iloc[-2]
+    provisional = last["d"].date() == now_local.date() and now_local.time() < close_t
+    c, pc = float(last["c"]) * scale, float(prev["c"]) * scale
+    return {"price": c, "prev_close": pc, "change": c / pc - 1 if pc else None, "date": last["d"].date().isoformat(),
+            "provisional": bool(provisional), "market_open": market_open(region),
+            "note": "Intraday, delayed ~15 min — not used in scores" if provisional else "Last completed session close"}

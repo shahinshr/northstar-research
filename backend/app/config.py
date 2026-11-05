@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     chain_fx: str = "boc,frankfurter,yahoo"
     chain_fund_profile: str = "yahoo,fmp,eodhd"
     chain_holdings: str = "issuer,fmp,eodhd,yahoo"
-    universe: str = "core"  # starter | core | extended (overridable in Settings)
+    universe: str = "global"  # starter | core | global | extended (overridable in Settings)
     ingest_workers: int = 4
 
     def chain(self, dataset: str) -> list[str]:

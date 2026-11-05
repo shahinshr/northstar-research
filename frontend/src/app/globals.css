@@ -2,26 +2,34 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Tokens: chart chrome + categorical slots from the validated dataviz reference palette. */
+/* Design tokens. Chart slots (--s1..--s8, diverging, status) are the validated dataviz palette —
+   change chrome freely, but re-validate before changing series colours. */
 :root {
   color-scheme: light;
-  --page: #f9f9f7;
-  --surface: #fcfcfb;
+  --page: #f4f5f7;
+  --page-2: #eef1f6;
+  --surface: #ffffff;
   --raised: #ffffff;
-  --ink: #0b0b0b;
-  --ink-2: #52514e;
-  --muted: #6f6d68;
-  --line: #e1e0d9;
-  --grid: #e9e8e2;
-  --axis: #c3c2b7;
+  --sunken: #f7f8fa;
+  --ink: #0f1419;
+  --ink-2: #4a5160;
+  --muted: #6b7280;
+  --line: #e4e7ec;
+  --line-strong: #d3d8e0;
+  --grid: #eceef2;
+  --axis: #c9ced8;
   --accent: #2a78d6;
+  --accent-2: #4f5bd5;
   --accent-ink: #1c5cab;
   --good: #0ca30c;
   --warn: #fab219;
   --serious: #ec835a;
   --bad: #d03b3b;
-  --up: #006300;
-  --down: #b42f2f;
+  --up: #067a3e;
+  --down: #c0352f;
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow: 0 1px 3px rgba(16, 24, 40, 0.06), 0 1px 2px rgba(16, 24, 40, 0.04);
+  --shadow-lg: 0 12px 24px -8px rgba(16, 24, 40, 0.12), 0 4px 8px -4px rgba(16, 24, 40, 0.06);
   --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
   --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
   --div-neg: #d03b3b; --div-mid: #f0efec; --div-pos: #2a78d6;
@@ -29,37 +37,94 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --page: #0d0d0d; --surface: #1a1a19; --raised: #222221; --ink: #f0efec; --ink-2: #c3c2b7;
-    --muted: #9a9890; --line: #2c2c2a; --grid: #262624; --axis: #383835; --accent: #3987e5;
-    --accent-ink: #86b6ef; --up: #2fbf2f; --down: #f07a7a;
+    --page: #0b0d12; --page-2: #0e1219; --surface: #141821; --raised: #1a1f2a; --sunken: #10141b;
+    --ink: #eef1f6; --ink-2: #b8c0cc; --muted: #8b94a3; --line: #232a36; --line-strong: #2f3846;
+    --grid: #1e2430; --axis: #343d4c; --accent: #3987e5; --accent-2: #7b84f0; --accent-ink: #86b6ef;
+    --up: #34c76f; --down: #f27a74;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4); --shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+    --shadow-lg: 0 16px 32px -12px rgba(0, 0, 0, 0.7);
     --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
     --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
-    --div-mid: #383835;
+    --div-mid: #2a313d;
   }
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --page: #0d0d0d; --surface: #1a1a19; --raised: #222221; --ink: #f0efec; --ink-2: #c3c2b7;
-  --muted: #9a9890; --line: #2c2c2a; --grid: #262624; --axis: #383835; --accent: #3987e5;
-  --accent-ink: #86b6ef; --up: #2fbf2f; --down: #f07a7a;
+  --page: #0b0d12; --page-2: #0e1219; --surface: #141821; --raised: #1a1f2a; --sunken: #10141b;
+  --ink: #eef1f6; --ink-2: #b8c0cc; --muted: #8b94a3; --line: #232a36; --line-strong: #2f3846;
+  --grid: #1e2430; --axis: #343d4c; --accent: #3987e5; --accent-2: #7b84f0; --accent-ink: #86b6ef;
+  --up: #34c76f; --down: #f27a74;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4); --shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 16px 32px -12px rgba(0, 0, 0, 0.7);
   --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
   --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
-  --div-mid: #383835;
+  --div-mid: #2a313d;
 }
 
-html, body { background: var(--page); color: var(--ink); }
-body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+html, body { color: var(--ink); }
+body {
+  font-family: var(--font-inter), system-ui, -apple-system, "Segoe UI", sans-serif;
+  background:
+    radial-gradient(1200px 600px at 10% -10%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, color-mix(in srgb, var(--accent-2) 6%, transparent), transparent 55%),
+    var(--page);
+  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+}
 .tnum { font-variant-numeric: tabular-nums; }
+::selection { background: color-mix(in srgb, var(--accent) 25%, transparent); }
 
 @layer components {
-  .card { @apply rounded-xl border border-line bg-surface; }
-  .btn { @apply inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-3 py-1.5 text-sm font-medium text-ink hover:bg-page disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent; }
-  .btn-primary { @apply btn border-transparent bg-accent text-white hover:opacity-90 hover:bg-accent; }
-  .chip { @apply inline-flex items-center gap-1 rounded-full border border-line px-2.5 py-1 text-xs font-medium text-ink2 hover:text-ink; }
-  .chip-on { @apply border-accent text-accent-ink; background: color-mix(in srgb, var(--accent) 12%, transparent); }
-  .label { @apply text-2xs font-semibold uppercase tracking-wide text-muted; }
-  .input { @apply rounded-lg border border-line bg-raised px-2.5 py-1.5 text-sm text-ink placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-accent; }
+  .card { @apply rounded-2xl border border-line bg-surface; box-shadow: var(--shadow); }
+  .card-hover { transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease; }
+  .card-hover:hover { transform: translateY(-1px); box-shadow: var(--shadow-lg); border-color: var(--line-strong); }
+  .btn {
+    @apply inline-flex items-center gap-1.5 rounded-xl border border-line bg-raised px-3 py-1.5 text-sm font-medium text-ink disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent;
+    box-shadow: var(--shadow-sm); transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+  }
+  .btn:hover:not(:disabled) { background: var(--sunken); border-color: var(--line-strong); }
+  .btn:active:not(:disabled) { transform: translateY(1px); }
+  .btn-primary {
+    @apply btn border-transparent text-white;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    box-shadow: 0 6px 16px -6px color-mix(in srgb, var(--accent) 60%, transparent);
+  }
+  .btn-primary:hover:not(:disabled) { background: linear-gradient(135deg, var(--accent), var(--accent-2)); filter: brightness(1.06); }
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full border border-line bg-surface px-2.5 py-1 text-xs font-medium text-ink2;
+    transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+  }
+  .chip:hover { color: var(--ink); border-color: var(--line-strong); }
+  .chip-on { @apply border-accent text-accent-ink; background: color-mix(in srgb, var(--accent) 11%, var(--surface)); }
+  .label { @apply text-2xs font-semibold uppercase tracking-wider text-muted; }
+  .input {
+    @apply rounded-xl border border-line bg-raised px-3 py-1.5 text-sm text-ink placeholder:text-muted focus:outline-none;
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+  }
+  .input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
+  .glass { background: color-mix(in srgb, var(--surface) 78%, transparent); backdrop-filter: saturate(160%) blur(14px); -webkit-backdrop-filter: saturate(160%) blur(14px); }
+  .seg { @apply inline-flex rounded-xl border border-line bg-sunken p-0.5; }
+  .seg > button { @apply rounded-[10px] px-3 py-1 text-sm text-ink2; transition: background 140ms ease, color 140ms ease; }
+  .seg > button[aria-selected="true"], .seg > button[aria-checked="true"] { @apply bg-surface font-medium text-ink; box-shadow: var(--shadow-sm); }
 }
+
+/* motion — respects reduced-motion */
+@keyframes fade-up { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes pulse-dot { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--good) 55%, transparent); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+@keyframes shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
+.animate-in { animation: fade-up 260ms ease both; }
+.live-dot { width: 8px; height: 8px; border-radius: 999px; background: var(--good); animation: pulse-dot 1.8s infinite; display: inline-block; }
+.shimmer { background: linear-gradient(90deg, var(--grid) 0%, var(--sunken) 50%, var(--grid) 100%); background-size: 800px 100%; animation: shimmer 1.3s linear infinite; }
+.flash-up { animation: flash-up 1.2s ease; }
+.flash-down { animation: flash-down 1.2s ease; }
+@keyframes flash-up { 0% { background: color-mix(in srgb, var(--up) 22%, transparent); } 100% { background: transparent; } }
+@keyframes flash-down { 0% { background: color-mix(in srgb, var(--down) 22%, transparent); } 100% { background: transparent; } }
+@media (prefers-reduced-motion: reduce) {
+  .animate-in, .live-dot, .shimmer, .flash-up, .flash-down, .card-hover { animation: none !important; transition: none !important; }
+}
+
+/* thin scrollbars inside panels */
+.scroll-thin { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
 
 .recharts-cartesian-grid line { stroke: var(--grid); }
 .recharts-cartesian-axis-line, .recharts-cartesian-axis-tick-line { stroke: var(--axis); }

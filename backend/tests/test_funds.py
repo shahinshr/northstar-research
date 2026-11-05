@@ -127,3 +127,14 @@ def test_roic_not_meaningful_for_net_cash_balance_sheet():
                     "total_equity": 40, "cash": 38, "total_assets": 100, "income_tax": 2, "pretax_income": 10}}]}
     m = compute_stock_fundamentals(fin, price=10, market_cap=1000, fx_fin_to_px=1.0)
     assert m["roic"]["status"] == "nm"
+
+
+def test_quote_bars_merge_keeps_history_and_chains_adjusted_close():
+    from app.services.ingest import merge_quote_bars
+    hist = {"d": ["2026-11-03", "2026-11-04"], "o": [1, 1], "h": [1, 1], "l": [1, 1], "c": [100.0, 110.0], "ac": [50.0, 55.0], "v": [1, 1]}
+    quote = [{"d": "2026-11-03", "c": 999.0, "ac": 999.0}, {"d": "2026-11-04", "c": 110.0, "ac": 108.0},
+             {"d": "2026-11-05", "c": 121.0, "ac": 119.0}]
+    out = merge_quote_bars(hist, quote)
+    assert [b["d"] for b in out] == ["2026-11-03", "2026-11-04", "2026-11-05"]
+    assert out[0]["c"] == 100.0  # history wins for past dates
+    assert math.isclose(out[2]["ac"], 55.0 * 1.1)  # +10% raw move chained onto the stored adjusted series

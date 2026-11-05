@@ -7,12 +7,13 @@ import {
 } from "recharts";
 import type { Row } from "@/lib/api";
 import { compact, isNum, num, pct } from "@/lib/format";
-import { REGION_COLOR, REGION_LABEL, SERIES } from "@/lib/metrics";
+import { SERIES } from "@/lib/metrics";
+import { groupColor, regionGroup } from "./ui";
 
 const AXIS = { tickLine: false, axisLine: { stroke: "var(--axis)" }, tick: { fill: "var(--muted)", fontSize: 11 } } as const;
 
 function TipBox({ children }: { children: React.ReactNode }) {
-  return <div className="rounded-lg border border-line bg-raised px-3 py-2 text-xs text-ink shadow-lg">{children}</div>;
+  return <div className="rounded-xl border border-line bg-raised px-3 py-2 text-xs text-ink" style={{ boxShadow: "var(--shadow-lg)" }}>{children}</div>;
 }
 
 function LegendRow({ items }: { items: { label: string; color: string }[] }) {
@@ -33,10 +34,10 @@ export function ValueQualityScatter({ rows }: { rows: Row[] }) {
   const pts = rows
     .filter((r) => isNum(r.components?.value) && isNum(r.components?.quality))
     .map((r) => ({ x: r.components.value, y: r.components.quality, z: r.market_cap?.usd ?? 1e9, sym: r.symbol, name: r.name,
-      region: r.region, core: r.core.score, id: r.id, lbl: "" }));
+      region: r.region, group: r.region_group ?? regionGroup(r.region), core: r.core.score, id: r.id, lbl: "" }));
   // label only the 12 highest core scores — hundreds of labels would collide (hover shows the rest)
   [...pts].sort((a, b) => (b.core ?? 0) - (a.core ?? 0)).slice(0, 12).forEach((p) => { p.lbl = p.sym; });
-  const regions = (["US", "CA", "UK"] as const).filter((g) => pts.some((p) => p.region === g));
+  const groups = (["Americas", "Europe", "Asia-Pacific"] as const).filter((g) => pts.some((p) => p.group === g));
   if (!pts.length) return <p className="py-10 text-center text-sm text-muted">No scored stocks yet.</p>;
   return (
     <div>
@@ -55,7 +56,7 @@ export function ValueQualityScatter({ rows }: { rows: Row[] }) {
               const p = payload?.[0]?.payload;
               return p ? (
                 <TipBox>
-                  <div className="font-semibold">{p.sym} <span className="font-normal text-muted">{p.name}</span></div>
+                  <div className="font-semibold">{p.sym} <span className="font-normal text-muted">{p.name} · {p.region}</span></div>
                   <div className="tnum mt-1 grid grid-cols-2 gap-x-3 text-ink2">
                     <span>Value</span><span className="text-ink">{num(p.x, 1)}</span>
                     <span>Quality</span><span className="text-ink">{num(p.y, 1)}</span>
@@ -64,8 +65,8 @@ export function ValueQualityScatter({ rows }: { rows: Row[] }) {
                   </div>
                 </TipBox>) : null;
             }} />
-            {regions.map((g) => (
-              <Scatter key={g} name={REGION_LABEL[g]} data={pts.filter((p) => p.region === g)} fill={REGION_COLOR[g]}
+            {groups.map((g) => (
+              <Scatter key={g} name={g} data={pts.filter((p) => p.group === g)} fill={groupColor(g)}
                 fillOpacity={0.85} stroke="var(--surface)" strokeWidth={2} cursor="pointer" isAnimationActive={false}
                 onClick={(d: { id?: string; payload?: { id: string } }) => router.push(`/instrument/${d.payload?.id ?? d.id}`)}>
                 <LabelList dataKey="lbl" position="top" offset={8} stroke="none" style={{ fill: "var(--ink-2)", fontSize: 10, stroke: "none" }} />
@@ -75,7 +76,7 @@ export function ValueQualityScatter({ rows }: { rows: Row[] }) {
         </ResponsiveContainer>
       </div>
       <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
-        <LegendRow items={regions.map((g) => ({ label: REGION_LABEL[g], color: REGION_COLOR[g] }))} />
+        <LegendRow items={groups.map((g) => ({ label: g, color: groupColor(g) }))} />
         <span className="text-2xs text-muted">Bubble size = market cap · eligible stocks only · top-right = cheap and high quality vs peers</span>
       </div>
     </div>

@@ -29,6 +29,7 @@ async def lifespan(app: FastAPI):
         jobs.submit("discovery")  # first-run backfill
     if os.getenv("DISABLE_SCHEDULER") != "1":
         jobs.DailyScheduler(os.getenv("DISCOVERY_TIME", "04:00"), os.getenv("DISCOVERY_TZ", "America/Toronto")).start()
+        jobs.IntradayScheduler().start()
     yield
 
 

@@ -14,7 +14,8 @@ from datetime import date, timedelta
 from .base import ErrorCode, Provider, ProviderError, ProviderResult, require
 from .canonical import num
 
-FX_CCYS = ["USD", "GBP", "EUR", "CHF", "JPY", "AUD", "HKD", "CNY", "SEK", "NOK"]  # all published by BoC Valet
+FX_CCYS = ["USD", "GBP", "EUR", "CHF", "JPY", "AUD", "HKD", "CNY", "SEK", "NOK", "INR", "KRW", "TWD", "BRL",
+           "SGD", "ZAR", "MXN", "NZD"]  # all published by BoC Valet
 
 
 def _start(years: int = 11) -> date:
@@ -53,7 +54,7 @@ class FrankfurterProvider(Provider):
     signup_url = "https://frankfurter.dev"
 
     def fetch_fx(self) -> ProviderResult:
-        syms = ",".join(c for c in FX_CCYS + ["CAD"] if c != "EUR")
+        syms = ",".join(c for c in FX_CCYS + ["CAD"] if c not in ("EUR", "TWD"))  # ECB has no TWD
         d = self.get_json(f"https://api.frankfurter.dev/v1/{_start().isoformat()}..", params={"base": "EUR", "symbols": syms})
         rates = d.get("rates") or {}
         require(rates, ErrorCode.EMPTY, "Frankfurter empty")
@@ -124,12 +125,23 @@ class CashRates(Provider):
         h = yf.Ticker("^IRX").history(period="6y")
         return [{"d": ts.date().isoformat(), "v": float(v)} for ts, v in h["Close"].items()]
 
+    def _ecb_estr(self) -> list[dict]:
+        txt = self.get_text("https://data-api.ecb.europa.eu/service/data/EST/B.EU000A2X2A25.WT",
+                            params={"format": "csvdata", "startPeriod": _start(6).isoformat()})
+        rows = list(csv.reader(io.StringIO(txt)))
+        h = rows[0]
+        i_d, i_v = h.index("TIME_PERIOD"), h.index("OBS_VALUE")
+        out = [{"d": r[i_d], "v": num(r[i_v])} for r in rows[1:] if len(r) > i_v and num(r[i_v]) is not None]
+        require(out, ErrorCode.EMPTY, "ECB €STR empty")
+        return out
+
     def fetch_all(self) -> tuple[dict, list[dict]]:
         attempts, series = [], {}
         plan = {
             "CAD": [("boc:TB.CDN.90D.MID", self.boc.fetch_cad_cash)],
             "USD": [("fred:DTB3", lambda: self._fred("DTB3")), ("yahoo:^IRX", self._yahoo_irx)],
             "GBP": [("boe:IUDSOIA", lambda: self._boe("IUDSOIA"))],
+            "EUR": [("ecb:€STR", self._ecb_estr)],
         }
         for ccy, chain in plan.items():
             for label, fn in chain:

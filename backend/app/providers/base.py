@@ -69,7 +69,7 @@ class Provider:
     requires_key: bool = False
     signup_url: str = ""
     min_interval_s: float = 0.2
-    markets: tuple[str, ...] = ("US", "CA", "UK")
+    markets: tuple[str, ...] | None = None  # None = any market; restrict only where a provider genuinely can't serve
 
     def __init__(self, api_key: str = ""):
         self.api_key = api_key
@@ -88,7 +88,7 @@ class Provider:
         return {
             "id": self.id, "name": self.name, "configured": self.configured,
             "requires_key": self.requires_key, "signup_url": self.signup_url,
-            "markets": list(self.markets),
+            "markets": list(self.markets) if self.markets else ["all"],
             "datasets": [d for d in DATASETS if self.supports(d)],
         }
 
@@ -97,7 +97,7 @@ class Provider:
             raise ProviderError(ErrorCode.NOT_CONFIGURED, f"{self.name} API key not set")
         if not self.supports(dataset):
             raise ProviderError(ErrorCode.UNSUPPORTED, f"{self.name} has no {dataset} adapter")
-        if region and region not in self.markets:
+        if region and self.markets is not None and region not in self.markets:
             raise ProviderError(ErrorCode.UNSUPPORTED, f"{self.name} adapter not enabled for {region}")
         return getattr(self, f"fetch_{dataset}")(symbol, region, **kw)
 

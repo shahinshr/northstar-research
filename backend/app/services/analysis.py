@@ -14,12 +14,12 @@ from ..analytics import funds as fund_analytics
 from ..analytics import scoring
 from ..analytics.fundamentals import M, compute_stock_fundamentals
 from ..analytics.fx import FXTable
-from ..analytics.market import (bars_frame, dividend_yield, liquidity_and_volume, relative_metrics, risk_metrics,
+from ..analytics.market import (bars_frame, live_quote, dividend_yield, liquidity_and_volume, relative_metrics, risk_metrics,
                                 total_returns)
 from ..config import get_settings
 from ..db import AnalysisResult, AnalysisRun, Instrument, latest_completed_run, latest_snapshot, utcnow
-from ..providers.canonical import normalise_quote_currency
-from .ingest import MACRO
+from ..providers.canonical import normalise_quote_currency, region_group
+from .ingest import MACRO, load_prices
 from .universe import BENCHMARKS, FINANCIAL_EXCLUSIONS
 
 log = logging.getLogger(__name__)
@@ -35,6 +35,17 @@ KEY_INPUTS = ["fcf_yield", "earnings_yield", "ebitda_to_ev", "roic", "operating_
 MODEL_VERSIONS = {"core": scoring.CORE_V1["id"], "estimate": scoring.ESTIMATE_V1["id"],
                   "attention": [scoring.ATTENTION_V1["id"], scoring.ATTENTION_PV_V1["id"]],
                   "formulas": "fundamentals_v1, market_v1"}
+
+
+def latest_daily_run(s: Session, before=None) -> AnalysisRun | None:
+    """Most recent completed non-intraday run (comparison base for changes and alerts)."""
+    q = select(AnalysisRun).where(AnalysisRun.status == "completed").order_by(AnalysisRun.created_at.desc()).limit(60)
+    def naive(t):  # SQLite returns naive UTC; freshly created objects are aware
+        return t.replace(tzinfo=None) if t is not None and t.tzinfo else t
+    for r in s.scalars(q):
+        if (r.manifest or {}).get("kind", "daily") != "intraday" and (before is None or naive(r.created_at) < naive(before)):
+            return r
+    return None
 
 
 def clean_json(o):
@@ -165,7 +176,7 @@ def build_subject(s: Session, inst: Instrument, fx: FXTable, cash: dict, bench: 
     snaps = {ds: latest_snapshot(s, inst.id, ds) for ds in
              ("profile", "prices", "financials", "estimates", "price_targets", "news")}
     prof = snaps["profile"].payload if snaps["profile"] else {}
-    prices = snaps["prices"].payload if snaps["prices"] else {}
+    prices = load_prices(s, inst.id) or {}
     fin = snaps["financials"].payload if snaps["financials"] else None
     flags, metrics = [], {}
     raw_ccy = prof.get("quote_currency") or prices.get("quote_currency") or inst.currency
@@ -185,6 +196,7 @@ def build_subject(s: Session, inst: Instrument, fx: FXTable, cash: dict, bench: 
         out.update({"status": "failed", "metrics": {}, "eligibility": {"core": False, "reasons": ["No price data"]}})
         return out
     price, price_date = float(df["c"].iloc[-1]), df.index[-1].date()
+    out["live"] = live_quote(prices, inst.region or "US", scale)
     out["price"] = {"value": price, "currency": px_ccy, "date": price_date.isoformat(),
                     "change_1d": float(df["c"].iloc[-1] / df["c"].iloc[-2] - 1) if len(df) > 1 else None,
                     "adjustment": prices.get("adjustment"),
@@ -306,7 +318,7 @@ def build_fund_subject(s: Session, inst: Instrument, fx: FXTable, cash: dict, in
                        stock_ey: dict[str, tuple[float | None, bool]], fund_holdings: dict[str, dict] | None = None) -> dict:
     snaps = {ds: latest_snapshot(s, inst.id, ds) for ds in ("profile", "prices", "fund_profile", "holdings")}
     prof = snaps["profile"].payload if snaps["profile"] else {}
-    prices = snaps["prices"].payload if snaps["prices"] else {}
+    prices = load_prices(s, inst.id) or {}
     fp = snaps["fund_profile"].payload if snaps["fund_profile"] else {}
     hold = snaps["holdings"].payload if snaps["holdings"] else None
     cat = (inst.tags or {}).get("fund") or {}
@@ -328,6 +340,7 @@ def build_fund_subject(s: Session, inst: Instrument, fx: FXTable, cash: dict, in
         out.update({"status": "failed", "metrics": {}, "eligibility": {"core": False, "reasons": ["No price data"]}})
         return out
     price = float(df["c"].iloc[-1])
+    out["live"] = live_quote(prices, inst.region or "US", scale)
     out["price"] = {"value": price, "currency": px_ccy, "date": df.index[-1].date().isoformat(),
                     "change_1d": float(df["c"].iloc[-1] / df["c"].iloc[-2] - 1) if len(df) > 1 else None,
                     "adjustment": prices.get("adjustment"), "note": session_note or "Last completed session"}
@@ -432,7 +445,8 @@ def make_row(p: dict) -> dict:
         "id": p["id"], "symbol": p["symbol"], "name": p.get("name"), "region": p.get("region"),
         "exchange": p.get("exchange"), "currency": p.get("currency"), "sector": p.get("sector"),
         "industry": p.get("industry"), "asset_type": p.get("asset_type"), "asset_class": p.get("asset_class", "stock"),
-        "status": p.get("status"), "price": p.get("price"), "market_cap": p.get("market_cap"),
+        "status": p.get("status"), "price": p.get("price"), "live": p.get("live"), "market_cap": p.get("market_cap"),
+        "region_group": region_group(p.get("region")),
         "core": {k: core.get(k) for k in ("score", "rank", "status", "coverage", "reasons", "model", "label")},
         "estimate": {k: (sc.get("estimate") or {}).get(k) for k in ("score", "rank", "status")},
         "attention": {k: (sc.get("attention") or {}).get(k) for k in ("score", "model", "status")},
@@ -480,7 +494,7 @@ def tag_discovery(subjects: dict[str, dict]) -> dict[str, int]:
     return counts
 
 
-def compute_run(s: Session, run_id: str | None = None) -> AnalysisRun:
+def compute_run(s: Session, run_id: str | None = None, kind: str = "daily") -> AnalysisRun:
     # Workers update instruments (sector, name, type) in their own sessions; drop this session's cached
     # copies so the run sees current values rather than what was loaded at job start.
     s.expire_all()
@@ -502,11 +516,11 @@ def compute_run(s: Session, run_id: str | None = None) -> AnalysisRun:
             region_for = (b.tags or {}).get("benchmark_for")
             if not region_for and b.asset_type != "index":
                 continue
-            ps = latest_snapshot(s, b.id, "prices")
-            if not ps:
+            pp = load_prices(s, b.id)
+            if not pp:
                 continue
-            _, sc_ = normalise_quote_currency((ps.payload or {}).get("quote_currency") or b.currency)
-            bdf, _ = bars_frame(ps.payload, b.region or "US", sc_)
+            _, sc_ = normalise_quote_currency(pp.get("quote_currency") or b.currency)
+            bdf, _ = bars_frame(pp, b.region or "US", sc_)
             if bdf.empty:
                 continue
             if region_for:
@@ -627,7 +641,7 @@ def compute_run(s: Session, run_id: str | None = None) -> AnalysisRun:
                    "USDCAD": fx.rate("USD", "CAD"), "GBPCAD": fx.rate("GBP", "CAD"), "EURCAD": fx.rate("EUR", "CAD")},
             "cash_rates": {k: {"source": v["source"], "latest": v["points"][-1]} for k, v in cash.items()},
             "benchmarks": {r: b[0] for r, b in BENCHMARKS.items() if r in bench},
-            "indices": list(indices), "shortlist_threshold": SHORTLIST_THRESHOLD,
+            "indices": list(indices), "shortlist_threshold": SHORTLIST_THRESHOLD, "kind": kind,
         }
         # quality gate (spec §4 step 7): refuse to publish if coverage collapsed vs the previous run
         prev = latest_completed_run(s)
@@ -639,9 +653,13 @@ def compute_run(s: Session, run_id: str | None = None) -> AnalysisRun:
         else:
             run.status = "completed"
         s.commit()
-        if run.status == "completed":
-            from .alerts import generate_alerts
-            generate_alerts(s, run, prev)
+        if run.status == "completed" and kind != "intraday":  # intraday price moves must not spam alerts
+            try:  # an alerting problem must never un-publish a completed run
+                from .alerts import generate_alerts
+                generate_alerts(s, run, latest_daily_run(s, before=run.created_at))
+            except Exception:  # noqa: BLE001
+                log.exception("alert generation failed (run %s stays published)", run.id)
+                s.rollback()
     except Exception:
         log.exception("analysis run failed")
         s.rollback()

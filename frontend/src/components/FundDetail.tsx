@@ -8,8 +8,8 @@ import { useState } from "react";
 import { CompareLines, GapChart } from "@/components/charts";
 import { MetricGrid, Notes, PriceRisk, ScoreCard, Sources } from "@/components/InstrumentParts";
 import { JobPill } from "@/components/jobs";
-import { Confidence, Flags, MetricValue, Note, Skeleton, Stat } from "@/components/ui";
-import { api, type Analysis, type Job } from "@/lib/api";
+import { Confidence, Flags, LivePrice, MetricValue, Note, Skeleton, Stat } from "@/components/ui";
+import { api, type Analysis, type Job, type Live } from "@/lib/api";
 import { ago, compact, dateFmt, isNum, num, pct } from "@/lib/format";
 
 const TABS = ["Overview", "Costs & structure", "Holdings & exposure", "Tracking", "Price & risk", "Sources", "Notes"] as const;
@@ -31,7 +31,7 @@ function Bars({ data, label }: { data: Record<string, number>; label: string }) 
   );
 }
 
-export default function FundDetail({ a, job, track, busy }: { a: Analysis; job: Job | null; track: (j: Job) => void; busy: boolean }) {
+export default function FundDetail({ a, job, track, busy, live }: { a: Analysis; job: Job | null; track: (j: Job) => void; busy: boolean; live?: Live | null }) {
   const qc = useQueryClient();
   const sp = useSearchParams();
   const slug = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, "-");
@@ -60,11 +60,13 @@ export default function FundDetail({ a, job, track, busy }: { a: Analysis; job: 
           </p>
         </div>
         <div className="text-right">
-          <div className="text-3xl font-semibold text-ink tnum">{num(a.price.value)} <span className="text-base font-normal text-muted">{a.currency}</span></div>
+          <LivePrice official={a.price.value} currency={a.currency} live={live?.quote} size="lg" />
           <div className="text-sm">
-            {isNum(a.price.change_1d) ? <span className={a.price.change_1d >= 0 ? "text-up" : "text-down"}>{pct(a.price.change_1d, 2, true)}</span> : null}
-            <span className="text-muted"> · close {dateFmt(a.price.date)}</span>
+            {live?.quote?.provisional && isNum(live.quote.change) ? <span className={live.quote.change >= 0 ? "text-up" : "text-down"}>{pct(live.quote.change, 2, true)} today</span>
+              : isNum(a.price.change_1d) ? <span className={a.price.change_1d >= 0 ? "text-up" : "text-down"}>{pct(a.price.change_1d, 2, true)}</span> : null}
+            <span className="text-muted"> · close {dateFmt(a.price.date)} {num(a.price.value)}</span>
           </div>
+          {live?.quote?.provisional ? <div className="text-2xs text-muted">{live.quote.note}</div> : null}
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -73,10 +75,9 @@ export default function FundDetail({ a, job, track, busy }: { a: Analysis; job: 
         <JobPill job={job} />
         <span className="ml-auto text-xs text-muted">Snapshot {dateFmt(a.run.created_at, true)} ({ago(a.run.created_at)})</span>
       </div>
-      <div className="flex gap-1 overflow-x-auto border-b border-line" role="tablist">
+      <div className="seg max-w-full overflow-x-auto" role="tablist">
         {TABS.map((t) => (
-          <button key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)}
-            className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm ${tab === t ? "border-accent font-medium text-ink" : "border-transparent text-ink2 hover:text-ink"}`}>{t}</button>))}
+          <button key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)} className="whitespace-nowrap">{t}</button>))}
       </div>
 
       {tab === "Overview" && (

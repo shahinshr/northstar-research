@@ -18,7 +18,7 @@ export interface Row {
   components: Record<string, number | null>;
   metrics: Record<string, { value: number | null; status: Status }>;
   confidence: Confidence | null; eligibility: Eligibility | null; flags: string[]; watch: boolean;
-  asset_class?: "stock" | "fund"; discovery?: string[]; indices?: string[];
+  asset_class?: "stock" | "fund"; discovery?: string[]; indices?: string[]; live?: LiveQuote | null; region_group?: string;
   core_label?: string;
   // funds
   cohort?: string; fund_asset_class?: string; style?: string; family?: string; hedged?: boolean; index?: string | null; fund_model?: string | null;
@@ -88,13 +88,23 @@ export interface Analysis {
 
 export interface Holding { symbol: string; name: string | null; weight: number; sector?: string | null; asset_class?: string | null; location?: string | null }
 export interface Alert { id: string; kind: string; severity: string; message: string; instrument_id: string | null; created_at: string; read: boolean }
-export interface Settings { universe: "starter" | "core" | "extended"; discovery_time: string; timezone: string; presentation_currency: string }
+export interface Settings { universe: "starter" | "core" | "global" | "extended"; discovery_time: string; timezone: string;
+  presentation_currency: string; intraday_minutes: number }
 export interface Overlap { symbols: string[]; cells: { a: string; b: string; overlap: number | null; common: number | null; exact: boolean }[];
   complete: Record<string, boolean>; note: string }
 export interface Tracking { available: boolean; reason?: string; index?: string; currency?: string; hedged?: boolean;
   series?: { d: string; fund: number; index: number; gap: number }[] }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type Validation = { report: any | null; generated_at?: string };
+
+export interface AppStatus { run_id: string | null; run_at: string | null; run_kind: string | null; active_job: Job | null;
+  markets_open: string[]; intraday_minutes: number }
+export interface LiveQuote { price: number; prev_close: number; change: number | null; date: string; provisional: boolean;
+  market_open: boolean; note: string; currency?: string; fetched_at?: string | null }
+export interface StreamItem extends NewsItem { severity: "critical" | "high" | "normal"; tags: string[]; polarity: "positive" | "negative" | "neutral";
+  symbol?: string; instrument_id?: string; watch?: boolean }
+export interface Live { quote: LiveQuote | null; news: StreamItem[]; news_source: { provider: string; fetched_at: string; status: string } | null;
+  refreshing: boolean; social: { x_live: string; stocktwits: string; note: string } }
 
 export interface Period { period_end: string; fiscal_period: string; filing_date: string | null; fields: Record<string, number> }
 export interface Financials { provider: string; route: string; fetched_at: string; status: string; financial_currency: string; annual: Period[]; quarterly: Period[] }
@@ -121,6 +131,10 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  status: () => req<AppStatus>("/status"),
+  live: (id: string) => req<Live>(`/instruments/${id}/live`),
+  pulse: () => req<{ items: StreamItem[]; scope: string }>("/pulse"),
+  refreshQuotes: () => req<Job>("/quote-refreshes?mode=force", { method: "POST" }),
   dashboard: (asset: "stock" | "fund" = "stock") => req<Dashboard>(`/dashboard?asset=${asset}`),
   holdings: (id: string) => req<{ provider: string; route: string; fetched_at: string; complete: boolean; as_of: string | null; holdings: Holding[] }>(`/instruments/${id}/holdings`),
   tracking: (id: string, years = 3) => req<Tracking>(`/instruments/${id}/tracking?years=${years}`),

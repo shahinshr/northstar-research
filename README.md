@@ -1,8 +1,14 @@
 # Northstar Research — investment discovery dashboard (v0.2)
 
 Implements `Investment_Research_App_Specification.md` on free data with multi-provider fallback:
-~820 stocks (S&P 500, S&P/TSX Composite, FTSE 100) and 64 ETFs and mutual funds in comparable cohorts,
-re-screened daily, plus a validation suite that tests the data and the ranking against independent sources.
+~1,150 stocks across North America, Europe and Asia-Pacific/emerging markets:
+- **Americas & UK:** S&P 500, S&P/TSX, FTSE 100.
+- **Asia-Pacific:** ASX 200, Hang Seng, SSE 50, NIFTY 50.
+- **Europe:** DAX, CAC 40, SMI, Euro Stoxx 50.
+
+It also covers ~90 ETFs and mutual funds in comparable cohorts. The data refreshes automatically, with intraday quotes
+and breaking news while markets are open and full analysis daily. A validation suite tests the data and the ranking
+against independent sources.
 
 ## Run it
 

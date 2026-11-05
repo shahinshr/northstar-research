@@ -77,6 +77,8 @@ export const COMPONENT_LABEL: Record<string, string> = {
   value: "Value", quality: "Quality", growth: "Growth", resilience: "Resilience", momentum: "Momentum", revisions: "Revisions",
 };
 
-export const REGION_COLOR: Record<string, string> = { US: "var(--s1)", CA: "var(--s2)", UK: "var(--s3)" };
-export const REGION_LABEL: Record<string, string> = { US: "United States", CA: "Canada", UK: "United Kingdom" };
+export const REGION_LABEL: Record<string, string> = {
+  US: "United States", CA: "Canada", UK: "United Kingdom", EU: "Eurozone", CH: "Switzerland", AU: "Australia",
+  HK: "Hong Kong", CN: "China (A-shares)", IN: "India", JP: "Japan", KR: "Korea", TW: "Taiwan", BR: "Brazil",
+};
 export const SERIES = ["var(--s1)", "var(--s2)", "var(--s3)", "var(--s4)", "var(--s5)", "var(--s6)", "var(--s7)", "var(--s8)"];

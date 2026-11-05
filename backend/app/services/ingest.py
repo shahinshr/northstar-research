@@ -26,9 +26,10 @@ INDEX_DATASETS = ["prices"]
 STALE_AFTER = {"profile": timedelta(days=7), "prices": timedelta(hours=12), "financials": timedelta(days=7),
                "estimates": timedelta(hours=20), "price_targets": timedelta(hours=20), "news": timedelta(hours=12),
                "fund_profile": timedelta(days=7), "holdings": timedelta(days=3),
-               "fx": timedelta(hours=12), "cash_rates": timedelta(hours=20), "constituents": timedelta(days=7)}
+               "fx": timedelta(hours=12), "cash_rates": timedelta(hours=20), "constituents": timedelta(days=7),
+               "quote": timedelta(minutes=10)}
 MACRO = "macro"
-KEEP_VERSIONS = {"prices": 2, "holdings": 3}  # large payloads; other datasets keep 30 days of history
+KEEP_VERSIONS = {"prices": 2, "holdings": 3, "quote": 2}  # large payloads; other datasets keep 30 days of history
 
 
 def datasets_for(inst: Instrument) -> list[str]:
@@ -205,16 +206,24 @@ def refresh_many(insts: list[Instrument], datasets: list[str] | None, mode: str,
     return tot
 
 
+def _fx_incomplete(s: Session) -> bool:
+    """FX is also stale when it lacks a currency the app now needs (e.g. after adding a market)."""
+    from ..providers.macro import FX_CCYS
+    snap = latest_snapshot(s, MACRO, "fx")
+    have = {k for k, v in ((snap.payload or {}).get("series") or {}).items() if v} if snap else set()
+    return not set(FX_CCYS) - {"TWD"} <= have  # TWD only from BoC; tolerated if a fallback served FX
+
+
 def refresh_macro(s: Session, mode: str = "if_stale") -> dict:
     res = {}
-    if mode != "if_stale" or is_stale(s, MACRO, "fx"):
+    if mode != "if_stale" or is_stale(s, MACRO, "fx") or _fx_incomplete(s):
         out = run_fx_chain()
         store(s, MACRO, "fx", out)
         res["fx"] = out.provider or "failed"
     if mode != "if_stale" or is_stale(s, MACRO, "cash_rates"):
         series, attempts = fx_providers()["_cash"].fetch_all()
         result = (ProviderResult(payload=series, route="BoC / FRED / BoE",
-                                 status="valid" if len(series) == 3 else "partial") if series else None)
+                                 status="valid" if len(series) >= 3 else "partial") if series else None)
         store(s, MACRO, "cash_rates", ChainOutcome("cash_rates", provider="central_banks", result=result, attempts=attempts))
         res["cash_rates"] = list(series)
     return res
@@ -225,11 +234,16 @@ def sync_universe(s: Session, mode: str = "if_stale") -> dict:
     Delisted / dropped stocks are deactivated, never deleted (history preserved)."""
     universe = get_setting(s, "universe", get_settings().universe)
     snap = latest_snapshot(s, MACRO, "constituents")
-    if mode == "if_stale" and snap and not is_stale(s, MACRO, "constituents") and (snap.payload or {}).get("mode") == universe:
+    partial = any("FAILED" in n for n in (snap.payload or {}).get("notes", [])) if snap else False
+    if mode == "if_stale" and snap and not partial and not is_stale(s, MACRO, "constituents") and (snap.payload or {}).get("mode") == universe:
         members, notes = snap.payload["members"], ["constituents fresh"]
     else:
         members, notes = fetch_constituents(universe)
         prev = (snap.payload or {}).get("members") if snap else None
+        if prev and any("FAILED" in n for n in notes):  # keep members of indices that failed this time
+            have = {m["symbol"] for m in members}
+            failed_idx = {n.split(":")[0] for n in notes if "FAILED" in n}
+            members += [m for m in prev if m["symbol"] not in have and set(m.get("indices", [])) & failed_idx]
         if prev and len(members) < 0.8 * len(prev) and (snap.payload or {}).get("mode") == universe:
             notes.append("New list < 80% of previous — keeping previous list (likely a source failure)")
             members = prev
@@ -241,8 +255,9 @@ def sync_universe(s: Session, mode: str = "if_stale") -> dict:
         ensure_instrument(s, m["symbol"], "stock", tags={"indices": m["indices"]})
     for f in FUND_CATALOGUE:
         ensure_instrument(s, f["symbol"], "fund", tags={"fund": {k: v for k, v in f.items() if k != "symbol"}})
+    catalogue = {f["symbol"] for f in FUND_CATALOGUE}
     for region, (sym, name) in BENCHMARKS.items():
-        inst = ensure_instrument(s, sym, "fund", tags={"benchmark_for": region})
+        inst = ensure_instrument(s, sym, "fund" if sym in catalogue else "index", tags={"benchmark_for": region})
         inst.name = inst.name or name
     for sym, (name, ccy) in INDICES.items():
         inst = ensure_instrument(s, sym, "index", tags={"index": True})
@@ -286,3 +301,86 @@ def prune(s: Session) -> int:
 
 def today() -> date:
     return date.today()
+
+
+# ------------------------------------------------------------------ intraday quotes (light, no history rewrite)
+def refresh_quotes(s: Session, insts: list[Instrument]) -> dict:
+    """Bulk-download the last 5 sessions for the given instruments and store them as a small `quote`
+    snapshot. The 10-year history is untouched; readers merge quote bars over it (`load_prices`)."""
+    yahoo = providers()["yahoo"]
+    got = yahoo.fetch_prices_bulk([i.symbol for i in insts], period="5d", min_bars=1)
+    n = 0
+    for inst in insts:
+        p = got.get(inst.symbol)
+        if not p:
+            continue
+        store(s, inst.id, "quote", ChainOutcome("quote", provider="yahoo",
+              result=ProviderResult(payload={"bars": p["bars"]}, route="yfinance.download (5d)"),
+              attempts=[{"provider": "yahoo-bulk", "status": "ok"}]))
+        n += 1
+    return {"quotes": n, "requested": len(insts)}
+
+
+def _bars_list(bars) -> list[dict]:
+    if isinstance(bars, dict):
+        keys = list(bars)
+        return [dict(zip(keys, row)) for row in zip(*(bars[k] for k in keys))]
+    return list(bars or [])
+
+
+def merge_quote_bars(hist_bars, quote_bars) -> list[dict]:
+    """History is authoritative for past dates. Quote bars update the last stored day or append newer days;
+    their adjusted close is chained from the last stored bar (quote and history adjust on different bases)."""
+    H = sorted(_bars_list(hist_bars), key=lambda b: b["d"])
+    if not H:
+        return sorted(_bars_list(quote_bars), key=lambda b: b["d"])
+    base = H[-1]
+    by_date = {b["d"]: b for b in H}
+    for q in sorted(_bars_list(quote_bars), key=lambda b: b["d"]):
+        if not q.get("c") or q["d"] < base["d"]:
+            continue
+        ac = (base.get("ac") or base["c"]) * q["c"] / base["c"] if base.get("c") else q["c"]
+        by_date[q["d"]] = {**q, "ac": ac}
+    return sorted(by_date.values(), key=lambda b: b["d"])
+
+
+def load_prices(s: Session, iid: str) -> dict | None:
+    """Stored 10-year history merged with the newer intraday `quote` snapshot (if any)."""
+    hist = latest_snapshot(s, iid, "prices")
+    if hist is None:
+        return None
+    payload = dict(hist.payload or {})
+    q = latest_snapshot(s, iid, "quote")
+    if q is not None and q.payload and q.fetched_at >= hist.fetched_at:
+        payload["bars"] = merge_quote_bars(payload.get("bars"), q.payload.get("bars"))
+        payload["quote_fetched_at"] = q.fetched_at.isoformat()
+    return payload
+
+
+def prune_runs(s: Session, keep_intraday: int = 6, keep_days: int = 30) -> int:
+    """Keep the latest few intraday runs and daily runs for 30 days (spec §19 retention); drop the rest."""
+    from ..db import AnalysisResult, AnalysisRun
+    runs = s.scalars(select(AnalysisRun).order_by(AnalysisRun.created_at.desc())).all()
+    keep, intraday_seen = set(), 0
+    cutoff = utcnow() - timedelta(days=keep_days)
+    for r in runs:
+        created = r.created_at if r.created_at.tzinfo else r.created_at.replace(tzinfo=utcnow().tzinfo)
+        kind = (r.manifest or {}).get("kind", "daily")
+        if r.status != "completed":
+            if created > utcnow() - timedelta(hours=6):
+                keep.add(r.id)
+            continue
+        if kind == "intraday":
+            if intraday_seen < keep_intraday:
+                keep.add(r.id)
+            intraday_seen += 1
+        elif created > cutoff:
+            keep.add(r.id)
+    if runs:
+        keep.add(runs[0].id)
+    drop = [r.id for r in runs if r.id not in keep]
+    if drop:
+        s.execute(delete(AnalysisResult).where(AnalysisResult.run_id.in_(drop)))
+        s.execute(delete(AnalysisRun).where(AnalysisRun.id.in_(drop)))
+        s.commit()
+    return len(drop)
