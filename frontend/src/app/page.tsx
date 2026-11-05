@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, Calculator, Download, GitCompareArrows, Play, Plus, RefreshCw, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Calculator, Download, GitCompareArrows, Play, Plus, RefreshCw, Trophy, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -56,16 +56,22 @@ const STOCK_COLS: Col[] = [
   { id: "mcap", label: "Mkt cap", def: true, align: "right", title: "In presentation currency at reference FX", sort: (r) => r.market_cap?.presentation ?? null,
     cell: (r) => <span className="tnum text-ink2">{compact(r.market_cap?.presentation, r.market_cap?.presentation_currency)}</span> },
   { id: "core", label: "Core score", def: true, title: "Peer-relative research rank 0–100 (core_v1). Not an expected return.",
-    sort: (r) => r.core.score, cell: (r) => <ScoreBar score={r.core.score} reason={r.core.reasons?.join("; ")} label="Core score" /> },
+    sort: (r) => r.core.score, cell: (r) => <ScoreBar score={r.core.score} reason={r.core.reasons?.join("; ")} label="Core score" width={44} /> },
+  { id: "profile", label: "Profile", def: true, title: "Component percentiles: Value · Quality · Growth · Resilience · Momentum (hover for values)",
+    cell: (r) => <ComponentSpark c={r.components} /> },
   { id: "why", label: "Why on list", def: true, title: "Discovery lists this stock is on (spec §4: union of lists)",
     sort: (r) => r.discovery?.length ?? 0,
-    cell: (r) => <span className="flex max-w-[220px] flex-wrap gap-1">{(r.discovery ?? []).slice(0, 3).map((d) => <span key={d} className="chip py-0 text-2xs">{d}</span>)}</span> },
+    cell: (r) => r.discovery?.length ? (
+      <span className="inline-flex items-center gap-1" title={r.discovery.join(" · ")}>
+        <span className="chip max-w-[128px] truncate py-0 text-2xs">{r.discovery[0]}</span>
+        {r.discovery.length > 1 ? <span className="text-2xs font-medium text-muted">+{r.discovery.length - 1}</span> : null}
+      </span>) : <span className="text-muted">—</span> },
   { id: "estimate", label: "Est.-enh.", def: false, align: "right", title: "Separate model incl. EPS revisions (provisional)",
     sort: (r) => r.estimate.score, cell: (r) => <span className="tnum">{isNum(r.estimate.score) ? r.estimate.score.toFixed(1) : "—"}</span> },
   { id: "attention", label: "Attention", def: true, align: "right", title: "Market attention — NOT evidence of value",
     sort: (r) => r.attention.score, cell: (r) => <span className="tnum text-ink2" title={r.attention.model}>{isNum(r.attention.score) ? r.attention.score.toFixed(0) : "—"}</span> },
   ...(["value", "quality", "growth", "resilience", "momentum"] as const).map((k): Col => ({
-    id: `c_${k}`, label: k[0].toUpperCase() + k.slice(1, 4), title: `${k} component percentile`, def: true, align: "right",
+    id: `c_${k}`, label: k[0].toUpperCase() + k.slice(1, 4), title: `${k} component percentile`, def: false, align: "right",
     sort: (r) => r.components?.[k] ?? null,
     cell: (r) => <span className="tnum text-ink2">{isNum(r.components?.[k]) ? (r.components[k] as number).toFixed(0) : "—"}</span>,
   })),
@@ -78,23 +84,38 @@ const STOCK_COLS: Col[] = [
 
 const FUND_COLS: Col[] = [
   { id: "type", label: "Type", def: true, sort: (r) => r.asset_type,
-    cell: (r) => <span className="text-xs text-ink2">{r.asset_type === "mutualfund" ? "Mutual fund" : "ETF"}{r.style === "active" ? " · active" : ""}{r.hedged ? " · hedged" : ""}</span> },
+    cell: (r) => <span className="text-xs text-ink2" title={`${r.asset_type === "mutualfund" ? "Mutual fund" : "ETF"}${r.style === "active" ? ", actively managed" : ""}${r.hedged ? ", currency-hedged" : ""}`}>
+      {r.asset_type === "mutualfund" ? "Fund" : "ETF"}{r.style === "active" ? " · act." : ""}{r.hedged ? " · hdg" : ""}</span> },
   { id: "region", label: "Listing", def: true, sort: (r) => r.region, cell: (r) => <RegionDot region={r.region} /> },
   priceCol,
   { id: "fscore", label: "Fund score", def: true, title: "Rank within cohort — passive model (cost, tracking, diversification, liquidity) or basic screen",
     sort: (r) => r.core.score, cell: (r) => (
       <span className="inline-flex items-center gap-2">
-        <ScoreBar score={r.core.score} reason={r.core.reasons?.join("; ")} width={56} label={r.core.label ?? "Fund score"} />
-        {r.core.rank === 1 && isNum(r.core.score) ? <span className="chip py-0 text-2xs text-up" title="Best in cohort by this model">best in cohort</span> : null}
+        <ScoreBar score={r.core.score} reason={r.core.reasons?.join("; ")} width={44} label={r.core.label ?? "Fund score"} />
+        {r.core.rank === 1 && isNum(r.core.score) ? <Trophy size={13} className="text-[var(--warn)]" aria-label="Best in cohort" /> : null}
       </span>) },
   mcol("expense_ratio", "Cost", true), mcol("tracking_difference", "Track. diff", true), mcol("tracking_error", "Track. err"),
   { id: "aum", label: "Assets", def: true, align: "right", sort: (r) => v(r, "aum_usd"),
     cell: (r) => <span className="tnum text-ink2">{compact(v(r, "aum_usd"), "USD")}</span> },
   mcol("top10_weight", "Top-10", true), mcol("return_1y", "1y TR", true), mcol("return_3y_ann", "3y ann.", true),
-  mcol("return_5y_ann", "5y ann."), mcol("volatility_1y", "Vol 1y"), mcol("max_drawdown_3y", "Max DD 3y", true),
+  mcol("return_5y_ann", "5y ann."), mcol("volatility_1y", "Vol 1y"), mcol("max_drawdown_3y", "Max DD", true, "Maximum drawdown over 3 years"),
   mcol("distribution_yield", "Yield", true), mcol("duration", "Duration"), mcol("lookthrough_pe", "Look-thru P/E"),
   mcol("vendor_pe", "Vendor P/E"), mcol("sharpe_1y", "Sharpe"), confCol,
 ];
+
+const PROFILE_KEYS = ["value", "quality", "growth", "resilience", "momentum"] as const;
+/** Five tiny bars (percentiles 0-100) replace five numeric columns; exact values on hover. */
+function ComponentSpark({ c }: { c: Row["components"] }) {
+  if (!c || PROFILE_KEYS.every((k) => !isNum(c[k]))) return <span className="text-muted">—</span>;
+  const tip = PROFILE_KEYS.map((k) => `${k[0].toUpperCase()}${k.slice(1)} ${isNum(c[k]) ? (c[k] as number).toFixed(0) : "n/a"}`).join(" · ");
+  return (
+    <span className="inline-flex h-5 items-end gap-[3px]" title={tip} aria-label={tip}>
+      {PROFILE_KEYS.map((k) => (
+        <span key={k} className="w-[5px] rounded-sm" style={{ height: `${Math.max(8, isNum(c[k]) ? (c[k] as number) : 0)}%`,
+          background: isNum(c[k]) ? ((c[k] as number) >= 50 ? "var(--accent)" : "color-mix(in srgb, var(--accent) 40%, var(--grid))") : "var(--grid)" }} />))}
+    </span>
+  );
+}
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -105,8 +126,8 @@ export default function DashboardPage() {
   const pulse = useQuery({ queryKey: ["pulse"], queryFn: api.pulse, refetchInterval: 60_000, enabled: asset === "stock" });
   const d = q.data;
   const [preset, setPreset] = usePersisted("preset", "all");
-  const [stockCols, setStockCols] = usePersisted<string[]>("cols2", STOCK_COLS.filter((x) => x.def).map((x) => x.id));
-  const [fundCols, setFundCols] = usePersisted<string[]>("fcols", FUND_COLS.filter((x) => x.def).map((x) => x.id));
+  const [stockCols, setStockCols] = usePersisted<string[]>("cols3", STOCK_COLS.filter((x) => x.def).map((x) => x.id));
+  const [fundCols, setFundCols] = usePersisted<string[]>("fcols2", FUND_COLS.filter((x) => x.def).map((x) => x.id));
   const [region, setRegion] = useState("all");
   const [sector, setSector] = useState("all");
   const [index, setIndex] = useState("all");

@@ -68,14 +68,14 @@ export function DataTable({ rows, cols, visible, defaultSort, selected, setSelec
   return (
     <>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[1100px] border-collapse text-sm">
+        <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr className="border-b border-line text-left">
-              <th className="sticky left-0 z-10 w-[64px] min-w-[64px] bg-surface py-2 pl-3 pr-2" scope="col"><span className="sr-only">Select / watch</span></th>
-              <th className="sticky left-[64px] z-10 bg-surface px-2 py-2 text-2xs font-semibold uppercase tracking-wide text-muted" scope="col">Instrument</th>
+              <th className="sticky left-0 z-10 w-[56px] min-w-[56px] bg-surface py-2 pl-3 pr-1" scope="col"><span className="sr-only">Select / watch</span></th>
+              <th className="sticky left-[56px] z-10 bg-surface px-2 py-2 text-2xs font-semibold uppercase tracking-wide text-muted" scope="col">Instrument</th>
               {shown.map((col) => (
                 <th key={col.id} scope="col" title={col.title} aria-sort={sort.id === col.id ? (sort.dir === 1 ? "ascending" : "descending") : "none"}
-                  className={`whitespace-nowrap px-2 py-2 text-2xs font-semibold uppercase tracking-wide text-muted ${col.align === "right" ? "text-right" : ""}`}>
+                  className={`whitespace-nowrap px-1.5 py-2 text-2xs font-semibold uppercase tracking-wide text-muted ${col.align === "right" ? "text-right" : ""}`}>
                   <button className="inline-flex items-center gap-0.5 hover:text-ink" disabled={!col.sort}
                     onClick={() => setSort({ id: col.id, dir: sort.id === col.id ? (sort.dir === 1 ? -1 : 1) : -1 })}>
                     {col.label}{sort.id === col.id ? (sort.dir === 1 ? <ArrowUp size={11} /> : <ArrowDown size={11} />) : null}
@@ -91,7 +91,7 @@ export function DataTable({ rows, cols, visible, defaultSort, selected, setSelec
               return (
                 <FragmentRow key={r.id} header={header ? g : null} span={shown.length + 2}>
                   <tr className="group border-b border-line last:border-0 hover:bg-page">
-                    <td className="sticky left-0 z-10 w-[64px] min-w-[64px] bg-surface py-2 pl-3 pr-2 group-hover:bg-page">
+                    <td className="sticky left-0 z-10 w-[56px] min-w-[56px] bg-surface py-2 pl-3 pr-1 group-hover:bg-page">
                       <div className="flex items-center gap-2">
                         <input type="checkbox" aria-label={`Select ${r.symbol} for comparison`} checked={selected.includes(r.id)}
                           disabled={!selected.includes(r.id) && selected.length >= 8}
@@ -101,14 +101,14 @@ export function DataTable({ rows, cols, visible, defaultSort, selected, setSelec
                         </button>
                       </div>
                     </td>
-                    <td className="sticky left-[64px] z-10 max-w-[260px] bg-surface px-2 py-2 group-hover:bg-page">
+                    <td className="sticky left-[56px] z-10 w-[190px] max-w-[190px] bg-surface px-2 py-2 group-hover:bg-page">
                       <Link href={`/instrument/${r.id}`} className="block">
                         <span className="font-semibold text-ink hover:underline">{r.symbol}</span>
-                        <span className="block truncate text-xs text-muted">{r.name}</span>
+                        <span className="block truncate text-xs text-muted" title={r.name ?? undefined}>{r.name}</span>
                       </Link>
                     </td>
                     {shown.map((col) => (
-                      <td key={col.id} className={`whitespace-nowrap px-2 py-2 ${col.align === "right" ? "text-right" : ""}`}>{col.cell(r)}</td>))}
+                      <td key={col.id} className={`whitespace-nowrap px-1.5 py-2 ${col.align === "right" ? "text-right" : ""}`}>{col.cell(r)}</td>))}
                   </tr>
                 </FragmentRow>);
             })}

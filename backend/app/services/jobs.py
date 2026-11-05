@@ -195,6 +195,7 @@ class IntradayScheduler(threading.Thread):
     def __init__(self):
         super().__init__(daemon=True, name="intraday")
         self.last = 0.0
+        self.was_open: set[str] = set()
 
     def run(self) -> None:
         from ..analytics.market import market_open
@@ -203,10 +204,16 @@ class IntradayScheduler(threading.Thread):
             try:
                 with SessionLocal() as s:
                     minutes = int(get_setting(s, "intraday_minutes", 20) or 0)
-                if minutes > 0 and time.monotonic() - self.last >= minutes * 60:
-                    if any(market_open(r) for r in BENCHMARKS):
-                        submit("refresh_quotes")
-                        self.last = time.monotonic()
+                open_now = {r for r in BENCHMARKS if market_open(r)}
+                just_closed = self.was_open - open_now
+                self.was_open = open_now
+                if minutes > 0 and just_closed:
+                    # one closing refresh so official closes replace provisional quotes promptly
+                    submit("refresh_quotes", None, ["closing"], "force")
+                    self.last = time.monotonic()
+                elif minutes > 0 and open_now and time.monotonic() - self.last >= minutes * 60:
+                    submit("refresh_quotes")
+                    self.last = time.monotonic()
             except Exception:  # noqa: BLE001
                 log.exception("intraday tick failed")
             time.sleep(30)

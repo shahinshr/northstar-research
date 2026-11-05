@@ -74,7 +74,19 @@ def dashboard(asset: Literal["stock", "fund"] = "stock"):
         if run is None:
             return {"run": None, "rows": [], "changes": None, "active_job": _job_dict(active or last_job),
                     "state": "first_run_backfill"}
-        rows = [dict(r, watch=r["id"] in watch) for r in _rows(s, run.id, asset)]
+        from ..analytics.market import market_open
+        open_now = {}
+
+        def fresh_live(r):  # a stored intraday quote stops being "live" once its market has closed
+            lv = r.get("live")
+            if lv and lv.get("provisional"):
+                reg = r.get("region") or "US"
+                if reg not in open_now:
+                    open_now[reg] = market_open(reg)
+                if not open_now[reg]:
+                    return {**lv, "provisional": False, "note": "Market closed — awaiting official close in the next refresh"}
+            return lv
+        rows = [dict(r, watch=r["id"] in watch, live=fresh_live(r)) for r in _rows(s, run.id, asset)]
         rows.sort(key=lambda r: (r["core"]["score"] is None, -(r["core"]["score"] or 0), r["symbol"]))
         changes = {"entrants": [], "exits": [], "movers": [], "compared_to": None}
         if prev and asset == "stock":
