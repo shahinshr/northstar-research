@@ -1,0 +1,66 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Tokens: chart chrome + categorical slots from the validated dataviz reference palette. */
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --raised: #ffffff;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #6f6d68;
+  --line: #e1e0d9;
+  --grid: #e9e8e2;
+  --axis: #c3c2b7;
+  --accent: #2a78d6;
+  --accent-ink: #1c5cab;
+  --good: #0ca30c;
+  --warn: #fab219;
+  --serious: #ec835a;
+  --bad: #d03b3b;
+  --up: #006300;
+  --down: #b42f2f;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
+  --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
+  --div-neg: #d03b3b; --div-mid: #f0efec; --div-pos: #2a78d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --raised: #222221; --ink: #f0efec; --ink-2: #c3c2b7;
+    --muted: #9a9890; --line: #2c2c2a; --grid: #262624; --axis: #383835; --accent: #3987e5;
+    --accent-ink: #86b6ef; --up: #2fbf2f; --down: #f07a7a;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+    --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+    --div-mid: #383835;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --raised: #222221; --ink: #f0efec; --ink-2: #c3c2b7;
+  --muted: #9a9890; --line: #2c2c2a; --grid: #262624; --axis: #383835; --accent: #3987e5;
+  --accent-ink: #86b6ef; --up: #2fbf2f; --down: #f07a7a;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+  --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+  --div-mid: #383835;
+}
+
+html, body { background: var(--page); color: var(--ink); }
+body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+.tnum { font-variant-numeric: tabular-nums; }
+
+@layer components {
+  .card { @apply rounded-xl border border-line bg-surface; }
+  .btn { @apply inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-3 py-1.5 text-sm font-medium text-ink hover:bg-page disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent; }
+  .btn-primary { @apply btn border-transparent bg-accent text-white hover:opacity-90 hover:bg-accent; }
+  .chip { @apply inline-flex items-center gap-1 rounded-full border border-line px-2.5 py-1 text-xs font-medium text-ink2 hover:text-ink; }
+  .chip-on { @apply border-accent text-accent-ink; background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .label { @apply text-2xs font-semibold uppercase tracking-wide text-muted; }
+  .input { @apply rounded-lg border border-line bg-raised px-2.5 py-1.5 text-sm text-ink placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-accent; }
+}
+
+.recharts-cartesian-grid line { stroke: var(--grid); }
+.recharts-cartesian-axis-line, .recharts-cartesian-axis-tick-line { stroke: var(--axis); }
+.recharts-text { fill: var(--muted); font-size: 11px; }

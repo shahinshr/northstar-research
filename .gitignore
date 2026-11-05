@@ -1,0 +1,19 @@
+# secrets
+backend/.env
+# runtime data
+backend/data/
+backend/.venv/
+__pycache__/
+.pytest_cache/
+# frontend
+frontend/node_modules/
+frontend/.next/
+.DS_Store
+.env
+.env.local
+*.pyc
+.venv/
+node_modules/
+.next/
+next-env.d.ts
+*.tsbuildinfo
